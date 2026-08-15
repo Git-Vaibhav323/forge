@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-plex-sans: "Segoe UI", "Segoe UI Variable", system-ui, -apple-system,
+    sans-serif;
+  --font-plex-mono: "Cascadia Mono", "Consolas", "Segoe UI Mono", ui-monospace,
+    monospace;
+}
+
+@layer base {
+  * {
+    @apply border-line;
+  }
+  html {
+    background-color: #f3f0e8;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.045'/%3E%3C/svg%3E");
+  }
+  body {
+    @apply text-ink;
+    background: transparent;
+    font-feature-settings: "tnum" 1;
+  }
+  ::selection {
+    background: #d9c9a3;
+    color: #15161a;
+  }
+  :focus-visible {
+    outline: 2px solid #1f5aa6;
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+  .label-caps {
+    @apply font-mono text-[10px] uppercase tracking-[0.12em] text-muted;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-line-strong;
+  }
+}
