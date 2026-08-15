@@ -1,0 +1,74 @@
+[
+  {
+    "slug": "mfc-gv-100",
+    "name": "Meridian MFC-GV-100 — 1\" Gate Valve",
+    "goal": "product_configuration",
+    "category": "valves",
+    "status": "in_progress",
+    "files": ["Meridian_MFC-GV-100_Datasheet.pdf"],
+    "note": "Template-error group (1 of 5) — all 5 wrongly carry 285 PSI"
+  },
+  {
+    "slug": "mfc-gv-150",
+    "name": "Meridian MFC-GV-150 — 1.5\" Gate Valve",
+    "goal": "product_configuration",
+    "category": "valves",
+    "status": "in_progress",
+    "files": ["Meridian_MFC-GV-150_Datasheet.pdf"],
+    "note": "Template-error group (2 of 5)"
+  },
+  {
+    "slug": "mfc-gv-200",
+    "name": "Meridian MFC-GV-200 — 2\" Gate Valve",
+    "goal": "product_configuration",
+    "category": "valves",
+    "status": "in_progress",
+    "files": ["Meridian_MFC-GV-200_Datasheet.pdf"],
+    "note": "Template-error group (3 of 5)"
+  },
+  {
+    "slug": "mfc-gv-250",
+    "name": "Meridian MFC-GV-250 — 2.5\" Gate Valve",
+    "goal": "product_configuration",
+    "category": "valves",
+    "status": "in_progress",
+    "files": ["Meridian_MFC-GV-250_Datasheet.pdf"],
+    "note": "Template-error group (4 of 5)"
+  },
+  {
+    "slug": "mfc-gv-300",
+    "name": "Meridian MFC-GV-300 — 3\" Gate Valve",
+    "goal": "product_configuration",
+    "category": "valves",
+    "status": "in_progress",
+    "files": ["Meridian_MFC-GV-300_Datasheet.pdf"],
+    "note": "Template-error group (5 of 5)"
+  },
+  {
+    "slug": "vb-220",
+    "name": "Vantage VB-220 — 2\" Ball Valve",
+    "goal": "product_configuration",
+    "category": "valves",
+    "status": "in_progress",
+    "files": ["Vantage_VB220_Datasheet.pdf", "Vantage_VB220_DistributorCatalog.pdf"],
+    "note": "Genuine conflict — pressure rating disagrees 600 PSI vs 720 PSI"
+  },
+  {
+    "slug": "icv-45",
+    "name": "Ironclad ICV-45 — 4\" Check Valve",
+    "goal": "product_configuration",
+    "category": "valves",
+    "status": "in_progress",
+    "files": ["Ironclad_ICV45_Datasheet.pdf", "Ironclad_ICV45_TechBulletin.pdf"],
+    "note": "Genuine conflict — temperature rating disagrees 180C vs 210C"
+  },
+  {
+    "slug": "tbv-12",
+    "name": "Titan TBV-12 — 12\" Butterfly Valve",
+    "goal": "product_configuration",
+    "category": "valves",
+    "status": "in_progress",
+    "files": ["Titan_TBV12_Datasheet.pdf", "Titan_TBV12_SubmittalSheet.pdf"],
+    "note": "Genuine conflict — pressure rating disagrees 232 PSI vs 275 PSI"
+  }
+]

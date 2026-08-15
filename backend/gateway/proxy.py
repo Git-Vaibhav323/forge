@@ -7,23 +7,46 @@ from gateway.config import settings
 
 router = APIRouter()
 
+_client = httpx.AsyncClient(
+    timeout=15.0,
+    limits=httpx.Limits(max_keepalive_connections=20, max_connections=40),
+)
 
-@router.api_route("/api/projects", methods=["GET", "POST"])
+
+@router.api_route("/api/projects", methods=["GET", "POST", "OPTIONS"])
 async def proxy_projects_root(request: Request) -> Response:
     return await _forward(request, settings.project_service_url)
 
 
-@router.api_route("/api/projects/{project_id}", methods=["GET"])
+@router.api_route("/api/projects/{project_id}", methods=["GET", "DELETE", "OPTIONS"])
 async def proxy_project_detail(project_id: str, request: Request) -> Response:
     return await _forward(request, settings.project_service_url)
 
 
-@router.api_route("/api/projects/{project_id}/files", methods=["POST"])
+@router.api_route("/api/projects/{project_id}/files", methods=["POST", "OPTIONS"])
 async def proxy_project_files(project_id: str, request: Request) -> Response:
     return await _forward(request, settings.file_service_url, timeout=120.0)
 
 
-async def _forward(request: Request, upstream_base: str, timeout: float = 30.0) -> Response:
+@router.api_route("/api/projects/{project_id}/questions", methods=["GET", "OPTIONS"])
+async def proxy_project_questions(project_id: str, request: Request) -> Response:
+    return await _forward(request, settings.question_service_url)
+
+
+@router.api_route(
+    "/api/projects/{project_id}/questions/{question_id}/answer",
+    methods=["POST", "OPTIONS"],
+)
+async def proxy_project_question_answer(
+    project_id: str, question_id: str, request: Request
+) -> Response:
+    return await _forward(request, settings.question_service_url)
+
+
+async def _forward(request: Request, upstream_base: str, timeout: float = 15.0) -> Response:
+    if request.method == "OPTIONS":
+        return Response(status_code=204)
+
     url = f"{upstream_base}{request.url.path}"
     if request.url.query:
         url = f"{url}?{request.url.query}"
@@ -35,13 +58,13 @@ async def _forward(request: Request, upstream_base: str, timeout: float = 30.0) 
     }
     body = await request.body()
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        upstream = await client.request(
-            request.method,
-            url,
-            headers=headers,
-            content=body,
-        )
+    upstream = await _client.request(
+        request.method,
+        url,
+        headers=headers,
+        content=body,
+        timeout=timeout,
+    )
 
     return Response(
         content=upstream.content,

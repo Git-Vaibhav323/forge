@@ -4,9 +4,11 @@ Microservices behind a single **API gateway** on port **8000**. The frontend
 only talks to the gateway; it proxies to internal services.
 
 ```
-Frontend → gateway :8000 → project-service :8001  (jobs CRUD)
-                         → file-service    :8002  (uploads + MinIO)
-                         → stub routers              (attributes, questions, …)
+Frontend → gateway :8000 → project-service  :8001  (jobs CRUD)
+                         → file-service     :8002  (uploads + MinIO)
+                         → question-service :8003  (completeness loop)
+                         → evidence-service :8004  (next — M4)
+                         → stub routers              (reviews, outputs, …)
 ```
 
 ---
@@ -82,6 +84,7 @@ Expected output includes:
 ```
 Running upgrade  -> 001, create projects table
 Running upgrade 001 -> 002, create documents table
+Running upgrade 002 -> 003, create questions table
 ```
 
 If you only see `001` and not `002`, you are already up to date.
@@ -93,11 +96,12 @@ source .venv/bin/activate
 ./scripts/run-dev.sh
 ```
 
-Or three separate terminals:
+Or four separate terminals:
 
 ```bash
 uvicorn services.project_service.main:app --reload --port 8001
 uvicorn services.file_service.main:app --reload --port 8002
+uvicorn services.question_service.main:app --reload --port 8003
 uvicorn gateway.main:app --reload --port 8000
 ```
 
@@ -107,6 +111,7 @@ uvicorn gateway.main:app --reload --port 8000
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8001/health
 curl http://127.0.0.1:8002/health
+curl http://127.0.0.1:8003/health
 curl http://127.0.0.1:8000/api/projects
 ```
 
@@ -151,6 +156,7 @@ npm run dev
 | `GET` | `/api/projects` | ✅ |
 | `POST` | `/api/projects` | ✅ |
 | `GET` | `/api/projects/{id}` | ✅ (includes `documents[]`) |
+| `DELETE` | `/api/projects/{id}` | ✅ (job + questions + stored files) |
 
 **Stack:** FastAPI, Pydantic, SQLAlchemy 2, PostgreSQL 16, Alembic, psycopg 3
 
@@ -164,7 +170,7 @@ npm run dev
 | --- | --- | --- |
 | `POST` | `/api/projects/{id}/files` | ✅ |
 
-**Stack:** MinIO (S3-compatible), SHA-256 hash, PostgreSQL `documents` table
+**Stack:** S3-compatible object storage (MinIO locally, or Supabase Storage), SHA-256 hash, PostgreSQL `documents` table
 
 ### Duplicate file handling
 
@@ -180,19 +186,117 @@ Same SHA-256 content on the same project:
 
 ## Environment variables (`backend/.env`)
 
-Copy from `.env.example`. Required for M1 + M2:
+Copy from `.env.example`. Required for M1–M3:
 
 | Variable | Value | Used by |
 | --- | --- | --- |
 | `DATABASE_URL` | `postgresql+psycopg://forgedata:forgedata@localhost:5433/forgedata` | project + file services |
 | `PROJECT_SERVICE_URL` | `http://localhost:8001` | gateway, file-service |
 | `FILE_SERVICE_URL` | `http://localhost:8002` | gateway |
+| `QUESTION_SERVICE_URL` | `http://localhost:8003` | gateway |
 | `OBJECT_STORAGE_ENDPOINT` | `localhost:9000` | file-service |
 | `OBJECT_STORAGE_ACCESS_KEY` | `forgedata` | file-service |
 | `OBJECT_STORAGE_SECRET_KEY` | `forgedata` | file-service |
 | `OBJECT_STORAGE_BUCKET` | `forgedata` | file-service |
 | `OBJECT_STORAGE_SECURE` | `false` | file-service |
+| `OBJECT_STORAGE_REGION` | `us-east-1` | file-service (Supabase: your project region) |
 | `CORS_ORIGINS` | `http://localhost:3000` | all services |
+| `POSTGRES_HOST` / `POSTGRES_PASSWORD` | (Supabase) | all DB services — preferred over a raw `DATABASE_URL` when the password contains `%` |
+
+---
+
+## M3 — Completeness / questions ✅ DONE
+
+**Service:** `services/question_service/` on **:8003**
+
+| Method | Path | Status |
+| --- | --- | --- |
+| `GET` | `/api/projects/{id}/questions` | ✅ |
+| `POST` | `/api/projects/{id}/questions/{qid}/answer` | ✅ |
+
+Required fields come from the job **goal + category**. One open question at a time. `"Not applicable"` completes a field; `"I don't know"` does not. Answers persist in `questions`; `completionScore` / `blockingFieldsCount` update on the job.
+
+---
+
+## Next: M4 — evidence-service
+
+**Not built yet.** New service on **:8004**. Unlocks the **Evidence** tab (`GET /api/projects/{id}/attributes`).
+
+### Prerequisites (before writing M4)
+
+1. **M1–M3 green** — jobs, PDF upload, questions. Gateway `:8000` healthy.
+2. **At least one PDF on a job** in object storage (MinIO or Supabase bucket `forgedata`).
+3. **Same Postgres** as M1–M3. M4 adds tables (chunks / embeddings / attributes) via Alembic.
+4. **pgvector**
+   - Supabase: already available (`create extension vector`).
+   - Local Docker Postgres: enable the image/extension during M4 (not in compose yet).
+5. **New Python deps** (commented in `requirements.txt` until M4): `pymupdf`, `pgvector`; `ocrmypdf` only if you need scanned-PDF OCR.
+6. **Embeddings key** — optional for the first extract-only slice; required when RAG retrieval is wired (`LLM_API_KEY` or equivalent).
+
+Not needed for M4: Redis, Celery, LangGraph, review-service.
+
+**First M4 check:** one uploaded datasheet → attributes with `source`, `page`, quoted `evidence`, `confidence`. Missing stays missing. Two disagreeing quotes → `conflicting`, not a silent merge.
+
+See `plan.md` → **M4 — evidence-service**.
+
+---
+
+## Switch to Supabase (Postgres + Storage)
+
+Local Docker Postgres/MinIO still works. To use a hosted Supabase project instead:
+
+### 1. Create the project
+
+1. Open [https://supabase.com/dashboard](https://supabase.com/dashboard) and create a project.
+2. Save the **database password** you set at creation. You cannot see it again.
+
+### 2. Database URL
+
+**Project Settings → Database → Connection string → URI.**
+
+Use the **Session pooler** (port **5432**). Do **not** use transaction pooler port **6543** — SQLAlchemy/Alembic need session mode.
+
+Replace `[YOUR-PASSWORD]` and turn it into a SQLAlchemy URL:
+
+```
+postgresql+psycopg://postgres.PROJECT_REF:YOUR_PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres?sslmode=require
+```
+
+If the password has `@`, `#`, `/`, or `%`, URL-encode it.
+
+Paste that as `DATABASE_URL` in `backend/.env`. Then from `backend/`:
+
+```bash
+python -m alembic upgrade head
+```
+
+That creates `projects`, `documents`, and `questions` in the Supabase database.
+
+### 3. Storage bucket (S3)
+
+1. **Storage → New bucket** named `forgedata` (private).
+2. **Storage → S3 Access Keys → New key.** Copy the access key and secret.
+3. **Project Settings → General** — copy the **Reference ID**.
+4. **Project Settings → General** (or Database) — note the **region** (example: `ap-south-1`).
+
+Set in `backend/.env`:
+
+```
+OBJECT_STORAGE_ENDPOINT=https://PROJECT_REF.storage.supabase.co/storage/v1/s3
+OBJECT_STORAGE_ACCESS_KEY=...
+OBJECT_STORAGE_SECRET_KEY=...
+OBJECT_STORAGE_BUCKET=forgedata
+OBJECT_STORAGE_SECURE=true
+OBJECT_STORAGE_REGION=ap-south-1
+```
+
+Comment out the local MinIO `OBJECT_STORAGE_*` lines so they do not override these.
+
+Restart **file-service** (and the other services so they pick up `DATABASE_URL`). You can stop Docker Postgres/MinIO after this — they are unused.
+
+### 4. Check it
+
+Upload a PDF on a job. In Supabase: **Storage → forgedata** should show `prj-…/doc-…/filename.pdf`. **Table Editor → projects** should list the job. **Remove job** in the UI should delete the row and the object.
 
 ---
 
@@ -255,7 +359,7 @@ source .venv/bin/activate
 pytest
 ```
 
-8 tests — unit + module. Module tests use SQLite in-memory by default (MinIO and HTTP mocked).
+21 tests — unit + module. Module tests use SQLite in-memory by default (object storage mocked).
 
 Postgres-backed (optional):
 
@@ -273,11 +377,13 @@ backend/
 ├── shared/                     schemas + SQLAlchemy models
 ├── services/
 │   ├── project_service/        :8001 — job CRUD
-│   └── file_service/           :8002 — uploads, MinIO, SHA-256 dedup
-├── alembic/                    001 projects, 002 documents
+│   ├── file_service/           :8002 — uploads, S3/MinIO, SHA-256 dedup
+│   └── question_service/       :8003 — completeness loop
+├── alembic/                    001 projects, 002 documents, 003 questions
 ├── docker-compose.yml          Postgres (:5433) + MinIO (:9000)
-├── scripts/run-dev.sh          start gateway + both services
-└── app/routers/                stub routers wired into gateway
+├── scripts/run-dev.sh          start gateway + M1–M3 services
+├── scripts/run-dev.ps1         same on Windows PowerShell
+└── app/routers/                stub routers (attributes, reviews, outputs)
 ```
 
 ---
@@ -289,13 +395,14 @@ backend/
 | GET | `/api/projects` | ✅ M1 |
 | POST | `/api/projects` | ✅ M1 |
 | GET | `/api/projects/{id}` | ✅ M1 (+ documents M2) |
+| DELETE | `/api/projects/{id}` | ✅ M1 |
 | POST | `/api/projects/{id}/files` | ✅ M2 |
 | GET | `/api/projects/{id}/attributes` | ⏳ M4 |
-| GET | `/api/projects/{id}/questions` | ⏳ M3 |
-| POST | `/api/projects/{id}/questions/{qid}/answer` | ⏳ M3 |
+| GET | `/api/projects/{id}/questions` | ✅ M3 |
+| POST | `/api/projects/{id}/questions/{qid}/answer` | ✅ M3 |
 | GET | `/api/projects/{id}/reviews` | ⏳ M5 |
 | POST | `/api/reviews/{rid}/decision` | ⏳ M5 |
 | GET | `/api/projects/{id}/outputs` | ⏳ M8 |
 | POST | `/api/projects/{id}/outputs` | ⏳ M8 |
 
-Next: **M3 — question-service**. See `plan.md`.
+Next: **M4 — evidence-service**. See `plan.md`.

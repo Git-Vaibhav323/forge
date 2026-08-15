@@ -38,14 +38,15 @@ The gateway preserves the **public API contract** (`/api/projects`, `/api/projec
 
 | Piece | Status |
 | --- | --- |
-| Frontend (all tabs) | UI complete; **Overview + create/upload on live API** when `NEXT_PUBLIC_API_BASE_URL` is set |
+| Frontend (all tabs) | UI complete; **Overview + create/upload + Questions live** when `NEXT_PUBLIC_API_BASE_URL` is set |
 | **Gateway** | ✅ `gateway/` on `:8000` — public entrypoint |
 | **project-service (M1)** | ✅ `services/project_service/` on `:8001` — Postgres CRUD |
 | **file-service (M2)** | ✅ `services/file_service/` on `:8002` — MinIO uploads, SHA-256 dedup |
-| **shared/** | ✅ `shared/schemas.py` + `shared/db/` (ProjectRow, DocumentRow) |
-| Attributes, questions, reviews, outputs | Stub routers in gateway (`backend/app/routers/`) — empty or `501` |
-| Postgres | ✅ Docker on host port **5433** |
-| MinIO | ✅ Docker on ports **9000** / **9001** |
+| **question-service (M3)** | ✅ `services/question_service/` on `:8003` — required fields, one-question loop |
+| **shared/** | ✅ `shared/schemas.py` + `shared/db/` + `shared/completeness.py` |
+| Attributes, reviews, outputs | Stub routers in gateway (`backend/app/routers/`) — empty or `501` |
+| Postgres | ✅ Docker on host port **5433**, or **Supabase Postgres** via `DATABASE_URL` |
+| MinIO / S3 | ✅ Docker MinIO **or Supabase Storage (S3 API)** |
 | Redis, LLM | Not wired |
 | Automated tests | ✅ **8 passing** (`pytest` — unit + module) |
 
@@ -76,9 +77,10 @@ Frontend: http://localhost:3000
 
 | Function | Merge | Status |
 | --- | --- | --- |
-| `listProjects`, `getProject`, `createProject` | M1 | ✅ live |
+| `listProjects`, `getProject`, `createProject`, `deleteProject` | M1 | ✅ live |
 | `uploadDocument` | M2 | ✅ live (409 on duplicate; `intent` param for retry) |
-| All others | M3–M8 | mock only |
+| `listQuestions`, `answerQuestion` | M3 | ✅ live |
+| All others | M4–M8 | mock only |
 
 ---
 
@@ -106,18 +108,18 @@ backend/
 │   └── db/documents.py         # read helpers
 ├── services/
 │   ├── project_service/        # :8001 ✅ M1
-│   └── file_service/           # :8002 ✅ M2
-├── alembic/                    # 001 projects, 002 documents
+│   ├── file_service/           # :8002 ✅ M2
+│   └── question_service/       # :8003 ✅ M3
+├── alembic/                    # 001 projects, 002 documents, 003 questions
 ├── docker-compose.yml          # Postgres (:5433) + MinIO (:9000)
-├── scripts/run-dev.sh          # start gateway + both services
-└── app/routers/                # stub routers (attributes, questions, …)
+├── scripts/run-dev.sh          # start gateway + M1–M3 services
+└── app/routers/                # stub routers (attributes, reviews, outputs)
 ```
 
 Still to extract:
 
 ```
 ├── services/
-│   ├── question_service/       # :8003  M3
 │   ├── evidence_service/       # :8004  M4
 │   ├── review_service/         # :8005  M5
 │   ├── relationship_service/   # :8006  M6
@@ -148,7 +150,7 @@ services/<name>/
 
 | Service | Port | Owns | Public routes (via gateway) |
 | --- | --- | --- | --- |
-| **project-service** | 8001 | Job lifecycle, goal, category, status, completion metadata | `GET/POST /api/projects`, `GET /api/projects/{id}` |
+| **project-service** | 8001 | Job lifecycle, goal, category, status, completion metadata | `GET/POST /api/projects`, `GET/DELETE /api/projects/{id}` |
 | **file-service** | 8002 | Upload bytes, hashes, document metadata, processing status | `POST /api/projects/{id}/files` |
 | **question-service** | 8003 | Required-field schema, completeness, single next question, answers | `GET /api/projects/{id}/questions`, `POST …/questions/{qid}/answer` |
 | **evidence-service** | 8004 | PDF/OCR extraction, chunks, pgvector, attribute mapping | `GET /api/projects/{id}/attributes` |
@@ -237,7 +239,7 @@ Integrate in dependency order. Each row is one merge milestone — do not wire t
 
 ---
 
-### M3 — question-service
+### M3 — question-service ✅ DONE
 
 **Unlocks:** Overview (completion score), Questions tab  
 **Calendar:** 1–2 weeks  
@@ -251,7 +253,7 @@ Integrate in dependency order. Each row is one merge milestone — do not wire t
 | Gateway | Proxy question routes; optionally aggregate completion fields onto project GET |
 | Frontend | `listQuestions`, `answerQuestion`; refresh project detail |
 
-**Done when:** Answering the next missing field updates `completionScore` and `blockingFieldsCount` from real rules.
+**Done when:** Answering the next missing field updates `completionScore` and `blockingFieldsCount` from real rules. ✅
 
 ---
 
@@ -351,7 +353,7 @@ When a service is merged and module tests pass, change only the matching functio
 | --- | --- | --- |
 | M1 | `listProjects`, `getProject`, `createProject` | ✅ live |
 | M2 | `uploadDocument` | ✅ live |
-| M3 | `listQuestions`, `answerQuestion` | mock |
+| M3 | `listQuestions`, `answerQuestion` | ✅ live |
 | M4 | `listAttributes` | mock |
 | M5 | `listReviewItems`, `submitReviewDecision` | mock |
 | M8 | `listOutputs`, `generateOutput` | mock |
@@ -371,12 +373,13 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 | **API gateway** | `:8000` — only public port the frontend uses | ✅ |
 | **project-service** | `:8001` | ✅ |
 | **file-service** | `:8002` | ✅ |
+| **question-service** | `:8003` | ✅ |
 | **PostgreSQL** | Host port **5433** → container 5432 | ✅ |
 | **MinIO** | `:9000` API, `:9001` console | ✅ |
 | **pgvector** | evidence-service embeddings | M4 |
 | **Redis** | Events, LangGraph interrupts | M5+ |
 
-`backend/.env.example` has all required vars for M1 + M2. Copy to `backend/.env`.
+`backend/.env.example` has all required vars for M1–M3. Copy to `backend/.env`.
 
 Postgres uses port **5433** on the host because **5432** is often taken by Colima or local Postgres installs.
 
@@ -389,18 +392,17 @@ docker compose up -d    # starts postgres + minio
 
 ## Order of work next
 
-M1 and M2 are merged and green. Next:
+M1–M3 are merged. Next:
 
-1. Extract **question-service** to `services/question_service/` on `:8003`
-2. Required-field schema per goal+category, completeness engine, one-question loop
+1. Extract **evidence-service** to `services/evidence_service/` on `:8004`
+2. PDF/OCR → cited chunks → attributes (never invent a value)
 3. Unit + module tests before gateway merge
-4. Gateway proxy for question routes
-5. Flip `listQuestions`, `answerQuestion` in `lib/api.ts`
+4. Flip `listAttributes` in `lib/api.ts`
 
-Do **not** start evidence extraction (M4) until M3 is merged — the question loop is a hard dependency for a coherent demo.
+Do **not** start review (M5) until evidence can produce real fields and conflicts.
 
 ---
 
 ## Migration note (monolith → services)
 
-M1 and M2 are extracted. `backend/app/routers/` still holds **stub routers** for attributes, questions, reviews, outputs — wired into the gateway until their services merge. The old `backend/app/main.py` is deprecated; use `gateway.main:app` on port 8000.
+M1–M3 are extracted. `backend/app/routers/` still holds **stub routers** for attributes, reviews, outputs — wired into the gateway until their services merge. The old `backend/app/main.py` is deprecated; use `gateway.main:app` on port 8000.

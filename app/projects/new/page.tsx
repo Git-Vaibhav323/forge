@@ -25,9 +25,7 @@ export default function NewProjectPage() {
     setSubmitting(true);
     try {
       const project = await api.createProject({ name, goal, category });
-      for (const file of files) {
-        await api.uploadDocument(project.id, file);
-      }
+      await Promise.all(files.map((file) => api.uploadDocument(project.id, file)));
       router.push(`/projects/${project.id}`);
     } finally {
       setSubmitting(false);

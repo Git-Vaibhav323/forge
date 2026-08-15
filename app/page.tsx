@@ -10,6 +10,7 @@ import { ProjectStatusBadge } from "@/components/shared/StatusBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { FolderOpen } from "lucide-react";
 import { timeAgo } from "@/lib/utils";
+import { RemoveJobButton } from "@/components/projects/RemoveJobButton";
 
 export default function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>();
@@ -77,6 +78,7 @@ export default function DashboardPage() {
                 <th className="label-caps px-3 py-2 text-right font-normal">
                   Touched
                 </th>
+                <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -121,6 +123,17 @@ export default function DashboardPage() {
                     </td>
                     <td className="px-3 py-2.5 text-right font-mono text-[11px] text-faint">
                       {timeAgo(project.updatedAt)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right">
+                      <RemoveJobButton
+                        projectId={project.id}
+                        projectName={project.name}
+                        onRemoved={() =>
+                          setProjects((current) =>
+                            current?.filter((p) => p.id !== project.id)
+                          )
+                        }
+                      />
                     </td>
                   </tr>
                 );

@@ -5,6 +5,7 @@ import { useProject } from "@/hooks/useProjectData";
 import { ProjectStatusBadge } from "@/components/shared/StatusBadge";
 import { Tabs, TabItem } from "@/components/ui/Tabs";
 import { PROJECT_GOAL_LABELS } from "@/lib/types";
+import { RemoveJobButton } from "@/components/projects/RemoveJobButton";
 
 export default function ProjectLayout({
   children,
@@ -44,9 +45,16 @@ export default function ProjectLayout({
               <h1 className="min-w-0 truncate text-[17px] font-semibold">
                 {project.name}
               </h1>
-              <span className="num shrink-0 font-mono text-[12px] text-muted">
-                {project.completionScore}% cited
-              </span>
+              <div className="flex shrink-0 items-center gap-3">
+                <span className="num font-mono text-[12px] text-muted">
+                  {project.completionScore}% cited
+                </span>
+                <RemoveJobButton
+                  projectId={project.id}
+                  projectName={project.name}
+                  redirectTo="/"
+                />
+              </div>
             </div>
             <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-faint">
               <span>{project.id}</span>

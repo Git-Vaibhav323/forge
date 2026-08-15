@@ -3,11 +3,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from services.file_service.storage import remove_object
+from shared.completeness import required_fields, score_answers
 from shared.db.documents import list_documents_for_project, list_documents_grouped
-from shared.db.models import ProjectRow
+from shared.db.models import DocumentRow, ProjectRow, QuestionRow
 from shared.schemas import Project, ProjectCreateInput, ProjectGoal, ProjectStatus
 
 
@@ -49,14 +51,16 @@ def get_project(db: Session, project_id: str) -> Project | None:
 
 def create_project(db: Session, payload: ProjectCreateInput) -> Project:
     now = datetime.now(timezone.utc)
+    specs = required_fields(payload.goal.value, payload.category)
+    completion, blocking = score_answers(specs, {})
     row = ProjectRow(
         id=generate_project_id(),
         name=payload.name,
         goal=payload.goal.value,
         category=payload.category,
         status=ProjectStatus.draft.value,
-        completion_score=0,
-        blocking_fields_count=0,
+        completion_score=completion,
+        blocking_fields_count=blocking,
         conflicts_count=0,
         pending_approvals_count=0,
         created_at=now,
@@ -70,3 +74,21 @@ def create_project(db: Session, payload: ProjectCreateInput) -> Project:
 
 def project_exists(db: Session, project_id: str) -> bool:
     return db.get(ProjectRow, project_id) is not None
+
+
+def delete_project(db: Session, project_id: str) -> bool:
+    row = db.get(ProjectRow, project_id)
+    if row is None:
+        return False
+
+    storage_keys = list(
+        db.scalars(select(DocumentRow.storage_key).where(DocumentRow.project_id == project_id))
+    )
+    db.execute(delete(QuestionRow).where(QuestionRow.project_id == project_id))
+    db.execute(delete(DocumentRow).where(DocumentRow.project_id == project_id))
+    db.delete(row)
+    db.commit()
+
+    for key in storage_keys:
+        remove_object(key)
+    return True

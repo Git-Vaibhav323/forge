@@ -1,0 +1,55 @@
+{
+  "_note": "Shape inferred from the plan's review-service description (conflicts, risk, decisions, bulk propagate). Confirm field names against shared/schemas.py before wiring this into review-service or frontend mocks.",
+
+  "review_items": [
+    {
+      "id": "rev-001",
+      "project_slug": "mfc-gv-100",
+      "type": "needs_review",
+      "reason": "safety_critical_field",
+      "attribute": "max_working_pressure",
+      "candidate_value": 285,
+      "unit": "PSI",
+      "source": "Meridian_MFC-GV-100_Datasheet.pdf",
+      "confidence": 0.94,
+      "expected_decision_demo": "Reviewer corrects to 150 PSI -> triggers bulk-fix propagation (see below)"
+    },
+    {
+      "id": "rev-002",
+      "project_slug": "vb-220",
+      "type": "conflicting",
+      "attribute": "max_working_pressure",
+      "candidates": [
+        {"value": 600, "unit": "PSI", "source": "Vantage_VB220_Datasheet.pdf", "confidence": 0.9},
+        {"value": 720, "unit": "PSI", "source": "Vantage_VB220_DistributorCatalog.pdf", "confidence": 0.82}
+      ]
+    },
+    {
+      "id": "rev-003",
+      "project_slug": "icv-45",
+      "type": "conflicting",
+      "attribute": "max_temperature",
+      "candidates": [
+        {"value": 180, "unit": "C", "source": "Ironclad_ICV45_Datasheet.pdf", "confidence": 0.91},
+        {"value": 210, "unit": "C", "source": "Ironclad_ICV45_TechBulletin.pdf", "confidence": 0.85}
+      ]
+    },
+    {
+      "id": "rev-004",
+      "project_slug": "tbv-12",
+      "type": "conflicting",
+      "attribute": "max_working_pressure",
+      "candidates": [
+        {"value": 232, "unit": "PSI", "source": "Titan_TBV12_Datasheet.pdf", "confidence": 0.89},
+        {"value": 275, "unit": "PSI", "source": "Titan_TBV12_SubmittalSheet.pdf", "confidence": 0.87}
+      ]
+    }
+  ],
+
+  "bulk_fix_propagation_demo": {
+    "trigger": "Resolving rev-001 (mfc-gv-100, max_working_pressure -> 150 PSI)",
+    "matched_by": "same attribute + same wrong value (285 PSI) + same source template (Meridian Flow Controls datasheet family)",
+    "affected_project_slugs": ["mfc-gv-150", "mfc-gv-200", "mfc-gv-250", "mfc-gv-300"],
+    "expected_ui": "Panel shows 4 other affected products with a before(285 PSI)/after(150 PSI) diff and a single confirm-all action"
+  }
+}

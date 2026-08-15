@@ -11,7 +11,23 @@ _SessionLocal = None
 
 def configure_engine(database_url: str) -> None:
     global _engine, _SessionLocal
-    _engine = create_engine(database_url, pool_pre_ping=True)
+    kwargs: dict = {"pool_pre_ping": True}
+    if database_url.startswith("postgresql"):
+        kwargs.update(
+            {
+                "pool_size": 5,
+                "max_overflow": 5,
+                "pool_recycle": 280,
+                "connect_args": {
+                    "connect_timeout": 8,
+                    "keepalives": 1,
+                    "keepalives_idle": 30,
+                    "keepalives_interval": 10,
+                    "keepalives_count": 3,
+                },
+            }
+        )
+    _engine = create_engine(database_url, **kwargs)
     _SessionLocal = sessionmaker(bind=_engine, autocommit=False, autoflush=False)
 
 

@@ -45,7 +45,9 @@ def db_session(engine) -> Generator[Session, None, None]:
 
 
 @pytest.fixture
-def project_client(db_session: Session) -> Generator[TestClient, None, None]:
+def project_client(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
+    monkeypatch.setattr("services.project_service.repository.remove_object", lambda *_args, **_kwargs: None)
+
     from services.project_service.main import app
     from services.project_service.routers import projects as projects_router
 
@@ -66,24 +68,6 @@ def file_client(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Generat
     monkeypatch.setattr("services.file_service.storage.remove_object", lambda *args, **kwargs: None)
     monkeypatch.setattr("services.file_service.storage.ensure_bucket", lambda: None)
 
-    class MockHttpxClient:
-        async def get(self, _url: str, **_kwargs):
-            class Response:
-                status_code = 200
-
-            return Response()
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return None
-
-    monkeypatch.setattr(
-        "services.file_service.routers.files.httpx.AsyncClient",
-        lambda **_kwargs: MockHttpxClient(),
-    )
-
     from services.file_service.main import app
     from services.file_service.routers import files as files_router
 
@@ -93,6 +77,22 @@ def file_client(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Generat
         yield db_session
 
     app.dependency_overrides[files_router.get_db] = override_get_db
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def question_client(db_session: Session) -> Generator[TestClient, None, None]:
+    from services.question_service.main import app
+    from services.question_service.routers import questions as questions_router
+
+    configure_engine(TEST_DATABASE_URL)
+
+    def override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[questions_router.get_db] = override_get_db
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

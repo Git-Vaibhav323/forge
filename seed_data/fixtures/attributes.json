@@ -1,0 +1,35 @@
+{
+  "_note": "Wire shape per project plan: { attribute, value, unit, source, page, evidence, confidence, status }. Status enum here (extracted / needs_review / conflicting) is inferred from the plan's prose, not confirmed against shared/schemas.py -- check that file and adjust before wiring this into evidence-service or the frontend mocks.",
+
+  "mfc-gv-100": [
+    {"attribute": "body_material", "value": "Ductile Iron", "unit": null, "source": "Meridian_MFC-GV-100_Datasheet.pdf", "page": 1, "evidence": "Body Material: Ductile Iron", "confidence": 0.97, "status": "extracted"},
+    {"attribute": "end_connection", "value": "Flanged (ANSI 125)", "unit": null, "source": "Meridian_MFC-GV-100_Datasheet.pdf", "page": 1, "evidence": "End Connection: Flanged (ANSI 125)", "confidence": 0.96, "status": "extracted"},
+    {"attribute": "max_working_pressure", "value": 285, "unit": "PSI", "source": "Meridian_MFC-GV-100_Datasheet.pdf", "page": 1, "evidence": "Max Working Pressure: 285 PSI", "confidence": 0.94, "status": "needs_review", "reviewer_note": "Pressure rating is safety-critical -> always human-gated per plan. This is the seeded template error: real spec should be ~150 PSI for this size."},
+    {"attribute": "max_temperature", "value": 200, "unit": "C", "source": "Meridian_MFC-GV-100_Datasheet.pdf", "page": 1, "evidence": "Max Temperature Rating: 200C", "confidence": 0.95, "status": "extracted"}
+  ],
+  "mfc-gv-150": [
+    {"attribute": "max_working_pressure", "value": 285, "unit": "PSI", "source": "Meridian_MFC-GV-150_Datasheet.pdf", "page": 1, "evidence": "Max Working Pressure: 285 PSI", "confidence": 0.94, "status": "needs_review", "reviewer_note": "Same template error as mfc-gv-100 -- propagation candidate."}
+  ],
+  "mfc-gv-200": [
+    {"attribute": "max_working_pressure", "value": 285, "unit": "PSI", "source": "Meridian_MFC-GV-200_Datasheet.pdf", "page": 1, "evidence": "Max Working Pressure: 285 PSI", "confidence": 0.94, "status": "needs_review", "reviewer_note": "Same template error as mfc-gv-100 -- propagation candidate."}
+  ],
+  "mfc-gv-250": [
+    {"attribute": "max_working_pressure", "value": 285, "unit": "PSI", "source": "Meridian_MFC-GV-250_Datasheet.pdf", "page": 1, "evidence": "Max Working Pressure: 285 PSI", "confidence": 0.94, "status": "needs_review", "reviewer_note": "Same template error as mfc-gv-100 -- propagation candidate."}
+  ],
+  "mfc-gv-300": [
+    {"attribute": "max_working_pressure", "value": 285, "unit": "PSI", "source": "Meridian_MFC-GV-300_Datasheet.pdf", "page": 1, "evidence": "Max Working Pressure: 285 PSI", "confidence": 0.94, "status": "needs_review", "reviewer_note": "Same template error as mfc-gv-100 -- propagation candidate."}
+  ],
+
+  "vb-220": [
+    {"attribute": "max_working_pressure", "value": 600, "unit": "PSI", "source": "Vantage_VB220_Datasheet.pdf", "page": 1, "evidence": "Max Working Pressure: 600 PSI", "confidence": 0.9, "status": "conflicting"},
+    {"attribute": "max_working_pressure", "value": 720, "unit": "PSI", "source": "Vantage_VB220_DistributorCatalog.pdf", "page": 1, "evidence": "Max Working Pressure: 720 PSI", "confidence": 0.82, "status": "conflicting"}
+  ],
+  "icv-45": [
+    {"attribute": "max_temperature", "value": 180, "unit": "C", "source": "Ironclad_ICV45_Datasheet.pdf", "page": 1, "evidence": "Max Temperature Rating: 180C", "confidence": 0.91, "status": "conflicting"},
+    {"attribute": "max_temperature", "value": 210, "unit": "C", "source": "Ironclad_ICV45_TechBulletin.pdf", "page": 1, "evidence": "Max Temperature Rating: 210C", "confidence": 0.85, "status": "conflicting"}
+  ],
+  "tbv-12": [
+    {"attribute": "max_working_pressure", "value": 232, "unit": "PSI", "source": "Titan_TBV12_Datasheet.pdf", "page": 1, "evidence": "Max Working Pressure: 232 PSI", "confidence": 0.89, "status": "conflicting"},
+    {"attribute": "max_working_pressure", "value": 275, "unit": "PSI", "source": "Titan_TBV12_SubmittalSheet.pdf", "page": 1, "evidence": "Max Working Pressure: 275 PSI", "confidence": 0.87, "status": "conflicting"}
+  ]
+}

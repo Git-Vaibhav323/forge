@@ -10,7 +10,9 @@ sqlalchemy==2.0.31
 psycopg[binary]==3.2.13
 alembic==1.13.2
 
-# Object storage (M2 — file uploads)
+# Object storage — MinIO locally, or Supabase Storage (S3 API) in production
+boto3==1.34.162
+botocore==1.34.162
 minio==7.2.7
 
 # Testing

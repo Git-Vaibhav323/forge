@@ -33,6 +33,22 @@ import { simulateLatency } from "./utils";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;
 const USE_MOCK = !API_BASE;
 
+const inflight = new Map<string, Promise<unknown>>();
+
+function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = inflight.get(key);
+  if (existing) return existing as Promise<T>;
+  const pending = fn().finally(() => inflight.delete(key));
+  inflight.set(key, pending);
+  return pending;
+}
+
+function invalidateApi(prefix: string) {
+  for (const key of [...inflight.keys()]) {
+    if (key.startsWith(prefix)) inflight.delete(key);
+  }
+}
+
 // In-memory mutable copies so mock-mode actions (answer, approve, etc.)
 // visibly persist across navigation within a session.
 const state = {
@@ -71,7 +87,9 @@ export async function getProject(id: string): Promise<Project | undefined> {
     await simulateLatency();
     return state.projects.find((p) => p.id === id);
   }
-  return http<Project>(`/api/projects/${id}`);
+  return dedupe(`GET:/api/projects/${id}`, () =>
+    http<Project>(`/api/projects/${id}`)
+  );
 }
 
 export async function createProject(input: {
@@ -106,6 +124,25 @@ export async function createProject(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  if (USE_MOCK) {
+    await simulateLatency(300);
+    state.projects = state.projects.filter((p) => p.id !== id);
+    delete state.attributes[id];
+    delete state.reviewItems[id];
+    delete state.questions[id];
+    delete state.outputs[id];
+    return;
+  }
+  const res = await fetch(`${API_BASE}/api/projects/${id}`, { method: "DELETE" });
+  if (res.status === 404) {
+    throw new Error("Job not found");
+  }
+  if (!res.ok) {
+    throw new Error(`API error ${res.status}: ${await res.text()}`);
+  }
 }
 
 export type UploadIntent = "reupload" | "replace";
@@ -190,7 +227,9 @@ export async function listQuestions(projectId: string): Promise<Question[]> {
     await simulateLatency();
     return state.questions[projectId] ?? [];
   }
-  return http<Question[]>(`/api/projects/${projectId}/questions`);
+  return dedupe(`GET:/api/projects/${projectId}/questions`, () =>
+    http<Question[]>(`/api/projects/${projectId}/questions`)
+  );
 }
 
 export async function answerQuestion(
@@ -209,10 +248,21 @@ export async function answerQuestion(
     q.answeredAt = new Date().toISOString();
     return q;
   }
-  return http<Question>(
-    `/api/projects/${projectId}/questions/${questionId}/answer`,
-    { method: "POST", body: JSON.stringify({ answer }) }
-  );
+  invalidateApi(`GET:/api/projects/${projectId}`);
+  try {
+    return await http<Question>(
+      `/api/projects/${projectId}/questions/${questionId}/answer`,
+      { method: "POST", body: JSON.stringify({ answer }) }
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    if (message.includes("409") && message.includes("not open")) {
+      const questions = await listQuestions(projectId);
+      const answered = questions.find((item) => item.id === questionId);
+      if (answered) return answered;
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------

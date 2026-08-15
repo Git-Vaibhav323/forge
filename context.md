@@ -125,6 +125,7 @@ in `lib/api.ts` — never the components.**
 | GET | `/api/projects` | `listProjects` |
 | POST | `/api/projects` | `createProject` |
 | GET | `/api/projects/{id}` | `getProject` |
+| DELETE | `/api/projects/{id}` | `deleteProject` |
 | POST | `/api/projects/{id}/files` | `uploadDocument` |
 | GET | `/api/projects/{id}/attributes` | `listAttributes` |
 | GET | `/api/projects/{id}/questions` | `listQuestions` |

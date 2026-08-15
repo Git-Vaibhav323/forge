@@ -3,13 +3,14 @@ ForgeData API Gateway — public entry on :8000.
 
 Proxies project routes → project-service (:8001)
 Proxies file upload routes → file-service (:8002)
+Proxies question routes → question-service (:8003)
 Other routes remain stub routers until their services merge.
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import attributes, outputs, questions, reviews
+from app.routers import attributes, outputs, reviews
 from gateway.config import settings
 from gateway.proxy import router as proxy_router
 
@@ -22,6 +23,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    # Next.dev hops to 3001/3002 when 3000 is busy; 127.0.0.1 is a different origin.
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,7 +32,6 @@ app.add_middleware(
 
 app.include_router(proxy_router)
 app.include_router(attributes.router)
-app.include_router(questions.router)
 app.include_router(reviews.router)
 app.include_router(outputs.router)
 

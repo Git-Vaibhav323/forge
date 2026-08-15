@@ -59,3 +59,28 @@ def test_duplicate_upload_returns_409_with_message(
 
     get_response = project_client.get(f"/api/projects/{project_id}")
     assert len(get_response.json()["documents"]) == 2
+
+
+def test_delete_project_drops_documents(
+    project_client: TestClient, file_client: TestClient, monkeypatch
+) -> None:
+    removed: list[str] = []
+    monkeypatch.setattr(
+        "services.project_service.repository.remove_object",
+        lambda key: removed.append(key),
+    )
+    created = project_client.post(
+        "/api/projects",
+        json={"name": "Wipe me", "goal": "product_configuration", "category": "valve"},
+    )
+    project_id = created.json()["id"]
+    file_client.post(
+        f"/api/projects/{project_id}/files",
+        files={"file": ("sheet.pdf", b"%PDF-delete-me", "application/pdf")},
+    )
+
+    deleted = project_client.delete(f"/api/projects/{project_id}")
+    assert deleted.status_code == 204
+    assert len(removed) == 1
+    assert removed[0].startswith(f"{project_id}/")
+    assert project_client.get(f"/api/projects/{project_id}").status_code == 404

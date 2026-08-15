@@ -81,18 +81,20 @@ export function QuestionCard({
       )}
 
       <div className="flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => onAnswer("Not applicable")}
-          className="text-[12px] text-muted underline decoration-dotted hover:text-ink"
-        >
-          Not applicable
-        </button>
-        <div className="flex gap-2">
           <button
             type="button"
+            disabled={submitting}
+            onClick={() => onAnswer("Not applicable")}
+            className="text-[12px] text-muted underline decoration-dotted hover:text-ink disabled:text-faint"
+          >
+            Not applicable
+          </button>
+          <div className="flex gap-2">
+          <button
+            type="button"
+            disabled={submitting}
             onClick={() => onAnswer("I don't know")}
-            className="text-[12px] text-muted underline decoration-dotted hover:text-ink"
+            className="text-[12px] text-muted underline decoration-dotted hover:text-ink disabled:text-faint"
           >
             I don&rsquo;t know
           </button>
