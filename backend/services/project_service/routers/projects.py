@@ -1,26 +1,26 @@
-"""
-Project Service — persisted job lifecycle (M1).
-
-Owns: project lifecycle, goal, category, status, completion score.
-Maps to: plan.md → M1 project-service (monolith-first in backend/app/).
-
-  TODO: compute completion_score from question-service instead of leaving it static.
-  TODO: emit ProjectCreated / ProjectStateUpdated events once an event bus exists.
-  TODO: include documents[] from file-service (M2) when merged.
-"""
-
 from __future__ import annotations
+
+from collections.abc import Generator
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.db.projects import create_project as create_project_row
-from app.db.projects import get_project as get_project_row
-from app.db.projects import list_projects as list_project_rows
-from app.db.session import get_db
-from app.models.schemas import Project, ProjectCreateInput
+from services.project_service.config import settings
+from services.project_service.repository import create_project as create_project_row
+from services.project_service.repository import get_project as get_project_row
+from services.project_service.repository import list_projects as list_project_rows
+from shared.db.session import get_session_factory
+from shared.schemas import Project, ProjectCreateInput
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+
+def get_db() -> Generator[Session, None, None]:
+    db = get_session_factory()()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 @router.get("", response_model=list[Project])

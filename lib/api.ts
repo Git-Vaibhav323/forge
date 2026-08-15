@@ -108,10 +108,31 @@ export async function createProject(input: {
   });
 }
 
+export type UploadIntent = "reupload" | "replace";
+
+export interface DuplicateDocumentDetail {
+  code: "duplicate_file";
+  message: string;
+  existingDocumentId: string;
+  existingFilename: string;
+  contentHash: string;
+}
+
+export class DuplicateDocumentError extends Error {
+  detail: DuplicateDocumentDetail;
+
+  constructor(detail: DuplicateDocumentDetail) {
+    super(detail.message);
+    this.name = "DuplicateDocumentError";
+    this.detail = detail;
+  }
+}
+
 export async function uploadDocument(
   projectId: string,
-  file: File
-): Promise<{ documentId: string; status: string }> {
+  file: File,
+  intent?: UploadIntent
+): Promise<{ documentId: string; status: string; filename?: string }> {
   if (USE_MOCK) {
     await simulateLatency(600);
     const project = state.projects.find((p) => p.id === projectId);
@@ -127,10 +148,15 @@ export async function uploadDocument(
   }
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_BASE}/api/projects/${projectId}/files`, {
+  const query = intent ? `?intent=${intent}` : "";
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/files${query}`, {
     method: "POST",
     body: form,
   });
+  if (res.status === 409) {
+    const body = (await res.json()) as { detail: DuplicateDocumentDetail };
+    throw new DuplicateDocumentError(body.detail);
+  }
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
   return res.json();
 }

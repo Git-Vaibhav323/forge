@@ -1,8 +1,36 @@
-# ForgeData — Backend plan
+# ForgeData — Backend plan (microservices)
 
-Fill the FastAPI service in this order. Each phase turns one more frontend tab from mock data into a live API. Do not skip ahead: later phases assume the earlier store, files, and field model exist.
+Build the backend as **independent services**, not phase-sized vertical slices. Each service owns its domain, database schema, and test suite. Integrate services **one at a time** into the API gateway only after that service passes **unit tests** and **module tests** (contract + integration against real dependencies).
 
-The UI is already demoable. Leave `NEXT_PUBLIC_API_BASE_URL` unset until a phase’s routes return the same JSON as `lib/types.ts`. Then flip only the matching function in `lib/api.ts` — never the React components.
+The UI stays on mock data until a service is merged and its routes match `lib/types.ts`. Flip only the matching functions in `lib/api.ts` — never the React components.
+
+---
+
+## Architecture shift
+
+| Before (phase-wise) | Now (microservices) |
+| --- | --- |
+| One monolith filled tab-by-tab in 6 phases | Separate deployable services with clear boundaries |
+| Later phases assume earlier code in the same process | Services communicate over HTTP and/or events; each can ship alone |
+| No test gates | **Unit + module tests required before merge** |
+| Shared in-process imports | Shared **contracts only** (`lib/types.ts`, events, OpenAPI) |
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Frontend (Next.js)  →  lib/api.ts  →  API Gateway :8000   │
+└───────────────────────────────┬─────────────────────────────┘
+                                │ HTTP (internal)
+        ┌───────────┬───────────┼───────────┬───────────┐
+        ▼           ▼           ▼           ▼           ▼
+   project-svc  file-svc   question-svc  evidence-svc  review-svc
+   :8001        :8002      :8003         :8004         :8005
+        │           │           │           │           │
+        └───────────┴───────────┴───────────┴───────────┘
+                          PostgreSQL, MinIO, Redis
+                    (schemas per service where possible)
+```
+
+The gateway preserves the **public API contract** (`/api/projects`, `/api/projects/{id}/files`, …). Internally it proxies or aggregates calls to the right service. The frontend never sees service boundaries.
 
 ---
 
@@ -10,69 +38,325 @@ The UI is already demoable. Leave `NEXT_PUBLIC_API_BASE_URL` unset until a phase
 
 | Piece | Status |
 | --- | --- |
-| Frontend (all tabs) | Done on mock data (`lib/mock-data.ts`) |
-| `GET/POST /api/projects`, `GET /api/projects/{id}` | Working, **in-memory only** |
-| `POST /api/projects/{id}/files` | Acknowledges upload, **does not store bytes** |
-| Attributes, questions, reviews, outputs | Empty list or `501 Not Implemented` |
-| Postgres, MinIO, Redis, LLM | Not wired |
+| Frontend (all tabs) | UI complete; **Overview + create/upload on live API** when `NEXT_PUBLIC_API_BASE_URL` is set |
+| **Gateway** | ✅ `gateway/` on `:8000` — public entrypoint |
+| **project-service (M1)** | ✅ `services/project_service/` on `:8001` — Postgres CRUD |
+| **file-service (M2)** | ✅ `services/file_service/` on `:8002` — MinIO uploads, SHA-256 dedup |
+| **shared/** | ✅ `shared/schemas.py` + `shared/db/` (ProjectRow, DocumentRow) |
+| Attributes, questions, reviews, outputs | Stub routers in gateway (`backend/app/routers/`) — empty or `501` |
+| Postgres | ✅ Docker on host port **5433** |
+| MinIO | ✅ Docker on ports **9000** / **9001** |
+| Redis, LLM | Not wired |
+| Automated tests | ✅ **8 passing** (`pytest` — unit + module) |
 
-Run the stub:
+### Run the stack
+
+See **`README.md`** (repo root) and **`backend/README.md`** for step-by-step instructions.
+
+Quick version:
 
 ```bash
+# Terminal 1 — backend
 cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+docker compose up -d
+source .venv/bin/activate   # Python 3.12 venv required
+alembic upgrade head          # use .venv/bin/alembic, not system python
+./scripts/run-dev.sh
+
+# Terminal 2 — frontend (repo root)
+cp .env.example .env.local    # set NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+npm install && npm run dev
 ```
 
-Health: `http://localhost:8000/health`  
-Docs: `http://localhost:8000/docs`
+Health: http://localhost:8000/health  
+Docs: http://localhost:8000/docs  
+Frontend: http://localhost:3000
+
+### Live frontend functions (`lib/api.ts`)
+
+| Function | Merge | Status |
+| --- | --- | --- |
+| `listProjects`, `getProject`, `createProject` | M1 | ✅ live |
+| `uploadDocument` | M2 | ✅ live (409 on duplicate; `intent` param for retry) |
+| All others | M3–M8 | mock only |
 
 ---
 
-## Hard rules (every phase)
+## Hard rules (every service)
 
-1. **Wire shape is locked.** Field JSON is `{ attribute, value, unit, source, page, evidence, confidence, status }`. Change `lib/types.ts` and `backend/app/models/schemas.py` together.
-2. **One seam.** Only `lib/api.ts` talks to the backend. Flip one function at a time when that route is real.
+1. **Wire shape is locked.** Field JSON is `{ attribute, value, unit, source, page, evidence, confidence, status }`. Change `lib/types.ts` and the shared Pydantic package together — never fork shapes per service.
+2. **One frontend seam.** Only `lib/api.ts` talks to the gateway. Flip one function at a time when that route is live.
 3. **Abstain, don’t invent.** A field may be `missing`, `conflicting`, or `needs_review`. Never fill a technical value from model knowledge.
-4. **Human gate.** Conflicts, high-risk fields (voltage, pressure, temperature, chemical compatibility, safety certs), bulk edits, and published-data changes always pause for a person. OCR and drafts may run unattended.
+4. **Human gate.** Conflicts, high-risk fields (voltage, pressure, temperature, chemical compatibility, safety certs), bulk edits, and published-data changes always pause for a person.
+5. **Test before merge.** No service is wired into the gateway until its unit suite is green and its module suite passes against Postgres / MinIO / Redis as applicable.
+6. **Service independence.** A service must boot, health-check, and run its tests without other application services running (use testcontainers or docker-compose profiles for deps).
 
 ---
 
-## Phase 1 — Project loop
+## Target layout
 
-**Unlocks:** Overview tab, Questions tab  
-**Calendar:** 2–3 weeks  
-**Files:** `routers/projects.py`, `routers/files.py`, `routers/questions.py`, `config.py`
+Current structure (M1 + M2 merged):
 
-### Build
+```
+backend/
+├── gateway/                    # Public API (:8000) — proxies + stub routers
+├── shared/                     # Cross-service contracts
+│   ├── schemas.py              # Pydantic mirror of lib/types.ts
+│   ├── db/models.py            # ProjectRow, DocumentRow
+│   └── db/documents.py         # read helpers
+├── services/
+│   ├── project_service/        # :8001 ✅ M1
+│   └── file_service/           # :8002 ✅ M2
+├── alembic/                    # 001 projects, 002 documents
+├── docker-compose.yml          # Postgres (:5433) + MinIO (:9000)
+├── scripts/run-dev.sh          # start gateway + both services
+└── app/routers/                # stub routers (attributes, questions, …)
+```
 
-- Replace the in-memory `_projects` dict with PostgreSQL (SQLAlchemy + psycopg).
-- Persist uploads to MinIO / S3-compatible storage. Store `documentId`, hash, filename, type, status.
-- Load a **required-field schema** per `goal` + `category` (what must be known before the job can move).
-- Completeness: classify each required field (`known` / `missing` / …). Compute `completionScore` and `blockingFieldsCount` from that, not a static number.
-- Ask **one** open question at a time (highest impact ÷ effort). Record answers and re-run completeness.
-- Process files inline for this cut. Redis/Celery can wait.
+Still to extract:
 
-### Routes that must work
+```
+├── services/
+│   ├── question_service/       # :8003  M3
+│   ├── evidence_service/       # :8004  M4
+│   ├── review_service/         # :8005  M5
+│   ├── relationship_service/   # :8006  M6
+│   ├── vision_service/         # :8007  M7
+│   └── generation_service/     # :8008  M8
+```
 
-| Method | Path |
+Each service follows the same internal shape:
+
+```
+services/<name>/
+├── app/
+│   ├── main.py           # FastAPI app, /health, domain routes
+│   ├── config.py
+│   ├── db/               # SQLAlchemy models + migrations (Alembic)
+│   ├── domain/           # business logic (pure functions where possible)
+│   └── api/              # route handlers (thin)
+├── tests/
+│   ├── unit/             # no network, no real DB
+│   └── module/           # real Postgres/MinIO via testcontainers or compose
+├── requirements.txt
+└── Dockerfile
+```
+
+---
+
+## Service catalog
+
+| Service | Port | Owns | Public routes (via gateway) |
+| --- | --- | --- | --- |
+| **project-service** | 8001 | Job lifecycle, goal, category, status, completion metadata | `GET/POST /api/projects`, `GET /api/projects/{id}` |
+| **file-service** | 8002 | Upload bytes, hashes, document metadata, processing status | `POST /api/projects/{id}/files` |
+| **question-service** | 8003 | Required-field schema, completeness, single next question, answers | `GET /api/projects/{id}/questions`, `POST …/questions/{qid}/answer` |
+| **evidence-service** | 8004 | PDF/OCR extraction, chunks, pgvector, attribute mapping | `GET /api/projects/{id}/attributes` |
+| **review-service** | 8005 | Unit normalize, conflicts, risk, decisions, bulk propagate, audit | `GET /api/projects/{id}/reviews`, `POST /api/reviews/{rid}/decision` |
+| **relationship-service** | 8006 | Variants, accessories, compatibility, BOM tables | Internal APIs consumed by generation / review |
+| **vision-service** | 8007 | Nameplate OCR, image-to-SKU, table reconstruction | Feeds evidence-service (same attribute contract) |
+| **generation-service** | 8008 | Goal templates, QA gate, artifact storage | `GET/POST /api/projects/{id}/outputs` |
+
+**Cross-cutting (later):** workflow-orchestrator (LangGraph interrupts), event bus (Redis Streams). Add only after review-service and evidence-service are merged and stable.
+
+---
+
+## Testing strategy
+
+### Unit tests (`tests/unit/`)
+
+- Pure domain logic: completeness scoring, conflict detection, risk classification, template rendering guards.
+- Pydantic validation and serializers.
+- HTTP handlers with dependencies mocked (no real DB or object storage).
+- **Gate:** `pytest services/<name>/tests/unit` — 100% pass, no skipped critical paths.
+
+### Module tests (`tests/module/`)
+
+- Service boots against real dependencies (Postgres, MinIO, Redis) via **docker-compose test profile** or **testcontainers**.
+- Repository round-trips, migrations apply cleanly, upload → metadata row → fetch.
+- **Contract tests:** response JSON matches OpenAPI generated from shared schemas; snapshot or schema-assert against fixtures derived from `lib/types.ts`.
+- **Gateway module tests:** gateway → service hop returns the same body the frontend expects (run with both processes or TestClient + httpx mock upstream).
+- **Gate:** `pytest services/<name>/tests/module` — 100% pass in CI.
+
+### CI merge checklist (per service)
+
+Before opening a “merge service X into gateway” PR:
+
+- [ ] Unit suite green locally and in CI
+- [ ] Module suite green with docker-compose `test` profile
+- [ ] Service `/health` and `/docs` (or internal OpenAPI) published
+- [ ] Gateway proxy routes added; gateway module tests green
+- [ ] Matching `lib/api.ts` functions flipped from mock to live
+- [ ] Manual smoke: affected UI tab works against live stack
+
+### Shared tooling to add (first extraction PR)
+
+- `pytest`, `pytest-asyncio`, `httpx`, `testcontainers` (or compose-based fixtures)
+- `ruff` for lint/format
+- Root `Makefile` or scripts: `make test-unit`, `make test-module`, `make up`
+
+---
+
+## Merge order
+
+Integrate in dependency order. Each row is one merge milestone — do not wire the gateway until both test gates pass.
+
+### M1 — project-service ✅ DONE
+
+**Unlocks:** Overview (project list + detail)  
+**Service:** `services/project_service/` on `:8001`
+
+| Work | Detail |
 | --- | --- |
-| GET | `/api/projects` |
-| POST | `/api/projects` |
-| GET | `/api/projects/{id}` |
-| POST | `/api/projects/{id}/files` |
-| GET | `/api/projects/{id}/questions` |
-| POST | `/api/projects/{id}/questions/{qid}/answer` |
+| Build | Postgres persistence, Alembic migrations, domain CRUD |
+| Unit tests | Create/read/update rules, schema validation |
+| Module tests | CRUD against SQLite (default) / Postgres (optional) |
+| Gateway | Proxy project routes to `:8001` |
+| Frontend | `listProjects`, `getProject`, `createProject` |
 
-### Dependencies to add
+**Done when:** Projects persist across restarts; unit + module green; Overview uses live API. ✅
 
-`sqlalchemy`, `psycopg[binary]`, `pydantic-settings`. MinIO client when uploads persist.
+---
 
-### Done when
+### M2 — file-service ✅ DONE
 
-You can create a job against the live API, upload a PDF, and answer the next missing field. Overview and Questions stop using mock data. Then set:
+**Unlocks:** Overview (documents list), create-job file upload  
+**Service:** `services/file_service/` on `:8002`  
+**Depends on:** M1 (project IDs must exist)
+
+| Work | Detail |
+| --- | --- |
+| Build | MinIO upload, SHA-256 hash, document row linked to `project_id` |
+| Unit tests | Filename sanitization, doc type guessing |
+| Module tests | Upload → metadata row → appears on project GET |
+| Duplicate handling | 409 on same hash; `?intent=reupload` or `?intent=replace` |
+| Gateway | Proxy `POST /api/projects/{id}/files` |
+| Frontend | `uploadDocument` (with optional `intent`) |
+
+**Done when:** Upload stores bytes and returns `documentId`; module tests prove round-trip. ✅
+
+---
+
+### M3 — question-service
+
+**Unlocks:** Overview (completion score), Questions tab  
+**Calendar:** 1–2 weeks  
+**Depends on:** M1, M2 (optional: file count for completeness)
+
+| Work | Detail |
+| --- | --- |
+| Build | Required-field schema per goal+category, completeness engine, one-question-at-a-time loop |
+| Unit tests | Scoring, blocking field count, question ranking, answer application |
+| Module tests | End-to-end: create project → answer → score updates in Postgres |
+| Gateway | Proxy question routes; optionally aggregate completion fields onto project GET |
+| Frontend | `listQuestions`, `answerQuestion`; refresh project detail |
+
+**Done when:** Answering the next missing field updates `completionScore` and `blockingFieldsCount` from real rules.
+
+---
+
+### M4 — evidence-service
+
+**Unlocks:** Evidence tab  
+**Calendar:** 2–3 weeks  
+**Depends on:** M2 (`FileUploaded` or poll document status)
+
+| Work | Detail |
+| --- | --- |
+| Build | PyMuPDF extract, OCR fallback, chunk+embed (pgvector), map to `Attribute` records |
+| Unit tests | Chunk boundaries, confidence thresholds, conflict marking (two sources → `conflicting`) |
+| Module tests | Sample PDF in MinIO → attributes rows with page + quoted evidence |
+| Gateway | Proxy `GET /api/projects/{id}/attributes` |
+| Frontend | `listAttributes` |
+
+**Done when:** Evidence tab shows real fields; missing stays missing; conflicts not merged.
+
+---
+
+### M5 — review-service
+
+**Unlocks:** Review tab  
+**Calendar:** 2–3 weeks  
+**Depends on:** M4 (attributes to validate)
+
+| Work | Detail |
+| --- | --- |
+| Build | Pint normalization, conflict/risk detection, review tasks, decisions, bulk propagate, audit log |
+| Unit tests | Risk rules, bulk fingerprint matching, decision state machine |
+| Module tests | Seed conflicting attributes → review item → decision persists → attribute status updates |
+| Gateway | Proxy review routes |
+| Frontend | `listReviewItems`, `submitReviewDecision` |
+
+**Done when:** Approve/edit/reject persists; print blocked while holds exist.
+
+---
+
+### M6 — relationship-service
+
+**Unlocks:** BOM / configuration jobs beyond flat fields  
+**Calendar:** 2 weeks  
+**Depends on:** M5 (mismatches become review items)
+
+| Work | Detail |
+| --- | --- |
+| Build | Variants, accessories, compatibility, BOM tables in Postgres |
+| Unit tests | Compatibility rules, BOM line resolution |
+| Module tests | Configuration job resolves parts; mismatch surfaces as review payload |
+| Gateway | No new public routes initially — called by generation-service |
+
+**Done when:** Configuration/BOM jobs resolve compatible parts; mismatches are review items, not silent merges.
+
+---
+
+### M7 — vision-service
+
+**Unlocks:** Nameplate / image sources  
+**Calendar:** 2 weeks  
+**Depends on:** M4 (same attribute contract)
+
+| Work | Detail |
+| --- | --- |
+| Build | Nameplate OCR, image-to-SKU, table reconstruction; write through evidence-service API or shared DB contract |
+| Unit tests | OCR post-processing, image source attribution |
+| Module tests | Image upload → attributes with `source` referencing image |
+| Gateway | Optional dedicated routes later; initially internal |
+
+**Done when:** Nameplate photo can fill or conflict with datasheet fields, citing the image.
+
+---
+
+### M8 — generation-service
+
+**Unlocks:** Outputs tab  
+**Calendar:** 2 weeks  
+**Depends on:** M5 (approved facts only), M6 for BOM/configuration goals
+
+| Work | Detail |
+| --- | --- |
+| Build | Goal-specific templates, QA gate (cite + approve), artifact storage |
+| Unit tests | QA gate blocks unresolved conflicts; template field sourcing |
+| Module tests | Approved project → generate → artifact stored → list returns file metadata |
+| Gateway | Proxy output routes |
+| Frontend | `listOutputs`, `generateOutput` |
+
+**Done when:** Print on Outputs tab writes a real file built only from approved, cited facts.
+
+---
+
+## Frontend switch-over (per merge)
+
+When a service is merged and module tests pass, change only the matching functions in `lib/api.ts` from the `USE_MOCK` branch to `http()`.
+
+| Merge | `lib/api.ts` functions | Status |
+| --- | --- | --- |
+| M1 | `listProjects`, `getProject`, `createProject` | ✅ live |
+| M2 | `uploadDocument` | ✅ live |
+| M3 | `listQuestions`, `answerQuestion` | mock |
+| M4 | `listAttributes` | mock |
+| M5 | `listReviewItems`, `submitReviewDecision` | mock |
+| M8 | `listOutputs`, `generateOutput` | mock |
+
+Set when M1 is live:
 
 ```
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
@@ -80,160 +364,43 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 
 ---
 
-## Phase 2 — Evidence and RAG
+## Local stack
 
-**Unlocks:** Evidence tab  
-**Calendar:** 3–4 weeks  
-**Files:** `routers/attributes.py`, new document-intelligence module
+| Component | Role | Status |
+| --- | --- | --- |
+| **API gateway** | `:8000` — only public port the frontend uses | ✅ |
+| **project-service** | `:8001` | ✅ |
+| **file-service** | `:8002` | ✅ |
+| **PostgreSQL** | Host port **5433** → container 5432 | ✅ |
+| **MinIO** | `:9000` API, `:9001` console | ✅ |
+| **pgvector** | evidence-service embeddings | M4 |
+| **Redis** | Events, LangGraph interrupts | M5+ |
 
-### Build
+`backend/.env.example` has all required vars for M1 + M2. Copy to `backend/.env`.
 
-- Extract text from PDFs (PyMuPDF). OCR fallback for scans (OCRmyPDF / Tesseract).
-- Chunk with **page + quoted text**. Store chunks; embed into **pgvector**.
-- Map chunks onto `Attribute` records with `confidence` and `status`. Keep `rawValue` even after unit normalize.
-- Two sources that disagree become `conflicting` — not a merged value.
+Postgres uses port **5433** on the host because **5432** is often taken by Colima or local Postgres installs.
 
-### Routes
-
-| Method | Path |
-| --- | --- |
-| GET | `/api/projects/{id}/attributes` |
-
-Wire `listAttributes()` in `lib/api.ts` only.
-
-### Dependencies to add
-
-`pymupdf`, `ocrmypdf`, `pgvector`. Embedding model/API as chosen.
-
-### Done when
-
-The Evidence tab shows real fields with source, page, quoted text, and confidence. Missing stays missing.
+```bash
+cd backend
+docker compose up -d    # starts postgres + minio
+```
 
 ---
 
-## Phase 3 — Validation and approval
+## Order of work next
 
-**Unlocks:** Review tab  
-**Calendar:** 3–4 weeks  
-**Files:** `routers/reviews.py`
+M1 and M2 are merged and green. Next:
 
-### Build
+1. Extract **question-service** to `services/question_service/` on `:8003`
+2. Required-field schema per goal+category, completeness engine, one-question loop
+3. Unit + module tests before gateway merge
+4. Gateway proxy for question routes
+5. Flip `listQuestions`, `answerQuestion` in `lib/api.ts`
 
-- Normalize units with Pint; keep the raw string.
-- Detect conflicts across sources.
-- Classify risk. Voltage / pressure / temperature / chemistry / certs are always `needs_review` or a review task.
-- Persist review tasks and decisions (`approve` / `edit` / `reject` / `unresolved`).
-- **Bulk propagate:** one approved edit can stage the same correction across sibling SKUs that share the error fingerprint, with rollback.
-- Audit log of every human decision.
-- LangGraph interrupt is the workflow pause — not a chatbot.
-
-### Routes
-
-| Method | Path |
-| --- | --- |
-| GET | `/api/projects/{id}/reviews` |
-| POST | `/api/reviews/{rid}/decision` |
-
-### Dependencies to add
-
-`langgraph`, Pint, Redis if the workflow needs a durable interrupt.
-
-### Done when
-
-Review lists real holds. Approve / edit / reject persist. Print stays blocked while holds exist.
+Do **not** start evidence extraction (M4) until M3 is merged — the question loop is a hard dependency for a coherent demo.
 
 ---
 
-## Phase 4 — Relationships
+## Migration note (monolith → services)
 
-**Unlocks:** BOM / configuration jobs that are more than a flat field list  
-**Calendar:** 2–3 weeks
-
-### Build
-
-- Variants, accessories, compatibility, BOM tables **in Postgres**. No graph database in this phase.
-- A `product_configuration` or `bom_generation` job must resolve parts that actually fit.
-- Mismatches become review items (Phase 3 contract), not silent merges.
-
-### Done when
-
-A configuration or BOM job resolves compatible parts and raises mismatches as holds.
-
----
-
-## Phase 5 — Vision
-
-**Unlocks:** Nameplate photos and scanned tables as first-class sources  
-**Calendar:** 2–3 weeks
-
-### Build
-
-- Nameplate / label OCR.
-- Image-to-SKU matching.
-- Table reconstruction from scanned datasheets.
-- Feed the **same** attribute + evidence contract. Do not add a parallel schema.
-
-### Done when
-
-A nameplate photo can fill or conflict with datasheet fields, citing the image as source.
-
----
-
-## Phase 6 — Generation
-
-**Unlocks:** Outputs tab  
-**Calendar:** ~2 weeks  
-**Files:** `routers/outputs.py`
-
-### Build
-
-- Goal-specific templates (configuration, BOM, quote, datasheet, installation pack, RFQ reply).
-- QA gate: every emitted field is cited and approved. Unresolved conflicts block generation.
-- Store the artifact; return it on list/create.
-
-### Routes
-
-| Method | Path |
-| --- | --- |
-| GET | `/api/projects/{id}/outputs` |
-| POST | `/api/projects/{id}/outputs` |
-
-### Done when
-
-Print on the Outputs tab writes a real file built only from approved, cited facts.
-
----
-
-## Frontend switch-over (per phase)
-
-When a route is real, change only the matching function in `lib/api.ts` from the `USE_MOCK` branch to `http()`. Components stay untouched.
-
-| Phase | `lib/api.ts` functions |
-| --- | --- |
-| 1 | `listProjects`, `getProject`, `createProject`, `uploadDocument`, `listQuestions`, `answerQuestion` |
-| 2 | `listAttributes` |
-| 3 | `listReviewItems`, `submitReviewDecision` |
-| 6 | `listOutputs`, `generateOutput` |
-
----
-
-## Suggested local stack (from Phase 1)
-
-| Service | Role |
-| --- | --- |
-| PostgreSQL | Jobs, documents metadata, attributes, questions, reviews, audit |
-| pgvector (Phase 2) | Evidence embeddings |
-| MinIO | Uploaded PDFs / images / CSV |
-| Redis + Celery (Phase 3+) | Extraction jobs, LangGraph interrupts |
-
-`backend/.env.example` already lists `DATABASE_URL`, `REDIS_URL`, `OBJECT_STORAGE_ENDPOINT`, `LLM_API_KEY`. Fill them as each phase needs them — not all at once.
-
----
-
-## Order of work this week
-
-1. Postgres + project CRUD persistence (`projects.py`).
-2. File upload to MinIO + document row (`files.py`).
-3. Category/goal required-field schema + completeness score.
-4. Question loop (`questions.py`) so Overview + Questions can go live.
-5. Only then start Phase 2 extraction.
+M1 and M2 are extracted. `backend/app/routers/` still holds **stub routers** for attributes, questions, reviews, outputs — wired into the gateway until their services merge. The old `backend/app/main.py` is deprecated; use `gateway.main:app` on port 8000.

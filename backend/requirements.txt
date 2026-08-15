@@ -2,15 +2,26 @@
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 pydantic==2.8.2
+pydantic-settings==2.3.4
 python-multipart==0.0.9
 
-# Add as each stage is implemented (see context.md → "Build order"):
-# sqlalchemy==2.0.31        # PostgreSQL ORM
-# psycopg[binary]==3.2.1    # PostgreSQL driver
+# PostgreSQL (M1 — project persistence)
+sqlalchemy==2.0.31
+psycopg[binary]==3.2.13
+alembic==1.13.2
+
+# Object storage (M2 — file uploads)
+minio==7.2.7
+
+# Testing
+pytest==8.3.2
+pytest-asyncio==0.23.8
+httpx==0.27.0
+
+# Add as each stage is implemented (see plan.md):
 # pgvector==0.3.2           # vector column type
-# redis==5.0.7              # event bus / job queue (mock mode: not needed)
+# redis==5.0.7              # event bus / job queue
 # celery==5.4.0             # background workers
 # pymupdf==1.24.9           # PDF text extraction
 # ocrmypdf==16.4.3          # OCR fallback for scanned PDFs
-# pydantic-settings==2.3.4  # env-based config
-# langgraph==0.1.14         # workflow orchestration (Phase 3+, see context.md)
+# langgraph==0.1.14         # workflow orchestration

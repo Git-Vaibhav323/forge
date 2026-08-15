@@ -1,30 +1,21 @@
 """
-ForgeData backend — API entry point (placeholder).
+Legacy monolith entry point — use the gateway instead:
 
-This wires the placeholder routers into one FastAPI app with CORS open to
-the frontend. Only the Projects router has a working (in-memory) store; the
-rest return empty lists or 501 until implemented. See context.md for the
-full architecture and the phased build order.
+    uvicorn gateway.main:app --reload --port 8000
 
-Run:
-    cd backend
-    python -m venv .venv && source .venv/bin/activate
-    pip install -r requirements.txt
-    uvicorn app.main:app --reload --port 8000
-
-Then in the frontend set NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+See backend/README.md for running project-service and file-service.
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import CORS_ORIGINS
-from app.routers import attributes, files, outputs, projects, questions, reviews
+from app.routers import attributes, outputs, questions, reviews
 
 app = FastAPI(
-    title="ForgeData API",
+    title="ForgeData API (legacy)",
     version="0.1.0",
-    description="Evidence-grounded industrial product intelligence (placeholder API).",
+    description="Deprecated — use gateway.main:app on port 8000.",
 )
 
 app.add_middleware(
@@ -35,8 +26,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(projects.router)
-app.include_router(files.router)
 app.include_router(attributes.router)
 app.include_router(questions.router)
 app.include_router(reviews.router)
@@ -45,4 +34,4 @@ app.include_router(outputs.router)
 
 @app.get("/health", tags=["meta"])
 def health() -> dict:
-    return {"status": "ok", "mode": "placeholder"}
+    return {"status": "ok", "mode": "legacy-stubs-only"}

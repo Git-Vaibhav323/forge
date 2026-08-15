@@ -10,6 +10,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
-CORS_ORIGINS = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
-DATABASE_URL = settings.database_url

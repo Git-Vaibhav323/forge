@@ -6,10 +6,8 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     cors_origins: str = "http://localhost:3000"
-    database_url: str = "postgresql+psycopg://forgedata:forgedata@localhost:5433/forgedata"
+    project_service_url: str = "http://localhost:8001"
+    file_service_url: str = "http://localhost:8002"
 
 
 settings = Settings()
-
-CORS_ORIGINS = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
-DATABASE_URL = settings.database_url

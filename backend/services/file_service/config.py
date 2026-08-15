@@ -7,9 +7,12 @@ class Settings(BaseSettings):
     app_env: str = "development"
     cors_origins: str = "http://localhost:3000"
     database_url: str = "postgresql+psycopg://forgedata:forgedata@localhost:5433/forgedata"
+    project_service_url: str = "http://localhost:8001"
+    object_storage_endpoint: str = "localhost:9000"
+    object_storage_access_key: str = "forgedata"
+    object_storage_secret_key: str = "forgedata"
+    object_storage_bucket: str = "forgedata"
+    object_storage_secure: bool = False
 
 
 settings = Settings()
-
-CORS_ORIGINS = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
-DATABASE_URL = settings.database_url
