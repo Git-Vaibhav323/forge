@@ -83,6 +83,22 @@ def file_client(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Generat
 
 
 @pytest.fixture
+def evidence_client(db_session: Session) -> Generator[TestClient, None, None]:
+    from services.evidence_service.main import app
+    from services.evidence_service.routers import attributes as attributes_router
+
+    configure_engine(TEST_DATABASE_URL)
+
+    def override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[attributes_router.get_db] = override_get_db
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def question_client(db_session: Session) -> Generator[TestClient, None, None]:
     from services.question_service.main import app
     from services.question_service.routers import questions as questions_router

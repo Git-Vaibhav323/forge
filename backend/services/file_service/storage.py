@@ -70,6 +70,14 @@ def put_object(storage_key: str, data: bytes, content_type: str) -> None:
     )
 
 
+def get_object(storage_key: str) -> bytes:
+    response = get_s3_client().get_object(
+        Bucket=settings.object_storage_bucket,
+        Key=storage_key,
+    )
+    return response["Body"].read()
+
+
 def remove_object(storage_key: str) -> None:
     try:
         get_s3_client().delete_object(

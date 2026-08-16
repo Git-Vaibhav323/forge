@@ -5,7 +5,13 @@ from sqlalchemy import create_engine, pool
 
 from app.config import DATABASE_URL
 from shared.db.base import Base
-from shared.db.models import DocumentRow, ProjectRow, QuestionRow  # noqa: F401
+from shared.db.models import (  # noqa: F401
+    AttributeEvidenceRow,
+    AttributeRow,
+    DocumentRow,
+    ProjectRow,
+    QuestionRow,
+)
 
 config = context.config
 

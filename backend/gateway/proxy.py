@@ -33,6 +33,20 @@ async def proxy_project_questions(project_id: str, request: Request) -> Response
     return await _forward(request, settings.question_service_url)
 
 
+@router.api_route("/api/projects/{project_id}/attributes", methods=["GET", "OPTIONS"])
+async def proxy_project_attributes(project_id: str, request: Request) -> Response:
+    return await _forward(request, settings.evidence_service_url)
+
+
+@router.api_route(
+    "/api/projects/{project_id}/attributes/extract",
+    methods=["POST", "OPTIONS"],
+)
+async def proxy_project_attributes_extract(project_id: str, request: Request) -> Response:
+    # Reading + parsing every PDF can take a while on a remote bucket.
+    return await _forward(request, settings.evidence_service_url, timeout=120.0)
+
+
 @router.api_route(
     "/api/projects/{project_id}/questions/{question_id}/answer",
     methods=["POST", "OPTIONS"],

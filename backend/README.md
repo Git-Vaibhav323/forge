@@ -7,7 +7,7 @@ only talks to the gateway; it proxies to internal services.
 Frontend → gateway :8000 → project-service  :8001  (jobs CRUD)
                          → file-service     :8002  (uploads + MinIO)
                          → question-service :8003  (completeness loop)
-                         → evidence-service :8004  (next — M4)
+                         → evidence-service :8004  (cited attributes / evidence)
                          → stub routers              (reviews, outputs, …)
 ```
 
@@ -218,26 +218,46 @@ Required fields come from the job **goal + category**. One open question at a ti
 
 ---
 
-## Next: M4 — evidence-service
+## M4 — evidence-service ✅ DONE
 
-**Not built yet.** New service on **:8004**. Unlocks the **Evidence** tab (`GET /api/projects/{id}/attributes`).
+**Service:** `services/evidence_service/` on **:8004**. Powers the **Evidence** tab.
 
-### Prerequisites (before writing M4)
+| Method | Path | Status |
+| --- | --- | --- |
+| `GET` | `/api/projects/{id}/attributes` | ✅ (stored, cited) |
+| `POST` | `/api/projects/{id}/attributes/extract` | ✅ (re-scan PDFs) |
 
-1. **M1–M3 green** — jobs, PDF upload, questions. Gateway `:8000` healthy.
-2. **At least one PDF on a job** in object storage (MinIO or Supabase bucket `forgedata`).
-3. **Same Postgres** as M1–M3. M4 adds tables (chunks / embeddings / attributes) via Alembic.
-4. **pgvector**
-   - Supabase: already available (`create extension vector`).
-   - Local Docker Postgres: enable the image/extension during M4 (not in compose yet).
-5. **New Python deps** (commented in `requirements.txt` until M4): `pymupdf`, `pgvector`; `ocrmypdf` only if you need scanned-PDF OCR.
-6. **Embeddings key** — optional for the first extract-only slice; required when RAG retrieval is wired (`LLM_API_KEY` or equivalent).
+**How it works (key-free, no API key, no pgvector):** the service downloads each
+PDF for the job from object storage, extracts text per page with `pypdf`, and
+runs deterministic label→field rules (`extraction.py`). Every value it emits
+carries the **document, page, and quoted line** it came from. Rules:
 
-Not needed for M4: Redis, Celery, LangGraph, review-service.
+- A field with no supporting quote is reported `missing` — never invented.
+- Two sources that disagree on the same field become `conflicting` (both quotes
+  kept), not a silent merge. This drives `conflictsCount` on the job.
+- Safety-critical fields (pressure, voltage, temperature, connection) carry a
+  high/critical `riskLevel`.
 
-**First M4 check:** one uploaded datasheet → attributes with `source`, `page`, quoted `evidence`, `confidence`. Missing stays missing. Two disagreeing quotes → `conflicting`, not a silent merge.
+The wire shape is the canonical `Attribute` + `Evidence`, identical to what a
+semantic RAG pipeline would emit — so `parse_page` can later be swapped for
+pgvector + embeddings **without touching the frontend or DB**.
 
-See `plan.md` → **M4 — evidence-service**.
+### What you must configure
+
+1. **Migration:** `alembic upgrade head` (adds `attributes`, `attribute_evidence` — revision `004`).
+2. **One dependency:** `python -m pip install pypdf` (already pinned in `requirements.txt`; pure Python, no system libs).
+3. **`EVIDENCE_SERVICE_URL=http://localhost:8004`** in `backend/.env` (already added).
+4. Object storage + Postgres — **same as M1–M3**. No new keys.
+
+Not needed: pgvector, embeddings key, Redis, Celery, OCR. (All deferred to later, drop-in.)
+
+### How to test M4
+
+- **Automated:** `python -m pytest tests/unit/test_evidence.py tests/module/test_evidence_api.py -q`
+- **End to end:** start all services (`scripts/run-dev.ps1`), open a job that has a
+  datasheet PDF, click **Evidence**. First visit auto-scans; use **Re-scan
+  documents** to re-run. Seed data (`Meridian_MFC-GV-100`) shows `285 PSI`;
+  the `VB-220` pair shows a **conflicting** temperature (`600` vs `720`).
 
 ---
 
@@ -379,9 +399,9 @@ backend/
 │   ├── project_service/        :8001 — job CRUD
 │   ├── file_service/           :8002 — uploads, S3/MinIO, SHA-256 dedup
 │   └── question_service/       :8003 — completeness loop
-├── alembic/                    001 projects, 002 documents, 003 questions
+├── alembic/                    001 projects, 002 documents, 003 questions, 004 attributes
 ├── docker-compose.yml          Postgres (:5433) + MinIO (:9000)
-├── scripts/run-dev.sh          start gateway + M1–M3 services
+├── scripts/run-dev.sh          start gateway + all services (:8001–:8004)
 ├── scripts/run-dev.ps1         same on Windows PowerShell
 └── app/routers/                stub routers (attributes, reviews, outputs)
 ```
@@ -397,7 +417,8 @@ backend/
 | GET | `/api/projects/{id}` | ✅ M1 (+ documents M2) |
 | DELETE | `/api/projects/{id}` | ✅ M1 |
 | POST | `/api/projects/{id}/files` | ✅ M2 |
-| GET | `/api/projects/{id}/attributes` | ⏳ M4 |
+| GET | `/api/projects/{id}/attributes` | ✅ M4 |
+| POST | `/api/projects/{id}/attributes/extract` | ✅ M4 |
 | GET | `/api/projects/{id}/questions` | ✅ M3 |
 | POST | `/api/projects/{id}/questions/{qid}/answer` | ✅ M3 |
 | GET | `/api/projects/{id}/reviews` | ⏳ M5 |
@@ -405,4 +426,4 @@ backend/
 | GET | `/api/projects/{id}/outputs` | ⏳ M8 |
 | POST | `/api/projects/{id}/outputs` | ⏳ M8 |
 
-Next: **M4 — evidence-service**. See `plan.md`.
+Next: **M5 — review-service** (conflict/high-risk queue). See `plan.md`.
