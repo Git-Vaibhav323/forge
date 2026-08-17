@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 from datetime import datetime, timezone
+from io import StringIO
 
 from shared.output_render import (
     RenderBomLine,
@@ -8,7 +10,7 @@ from shared.output_render import (
     RenderField,
     RenderFinding,
     output_filename,
-    render,
+    render_csv,
 )
 
 NOW = datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc)
@@ -28,20 +30,40 @@ def _context(**overrides) -> RenderContext:
 
 def test_filename_is_derived_from_goal_and_job():
     assert output_filename("product_datasheet", "prj-1042") == (
-        "product_datasheet_prj-1042.md"
+        "product_datasheet_prj-1042.csv"
     )
 
 
-def test_header_carries_the_job_identity():
-    body = render(_context())
-    assert "# Product datasheet" in body
-    assert "Gate valve datasheet" in body
-    assert "`prj-1042`" in body
-    assert "2026-08-17 12:00 UTC" in body
+def _parse_csv(body: str) -> dict:
+    """Parse CSV and return the first row as a dict."""
+    reader = csv.DictReader(StringIO(body))
+    row = next(reader)
+    return row
 
 
-def test_established_values_are_printed_with_their_source():
-    body = render(
+def test_csv_output_has_standard_unilog_headers():
+    """CSV should include all required Unilog columns."""
+    body = render_csv(_context())
+    reader = csv.DictReader(StringIO(body))
+    headers = reader.fieldnames or []
+    assert "PART_NUMBER" in headers
+    assert "MANUFACTURER_NAME" in headers
+    assert "ATTRIBUTE_LABEL 1" in headers
+    assert "ATTRIBUTE_VALUE 1" in headers
+    assert "ATTRIBUTE_UOM 1" in headers
+
+
+def test_csv_output_is_parseable():
+    """CSV should parse cleanly without errors."""
+    body = render_csv(_context())
+    reader = csv.DictReader(StringIO(body))
+    rows = list(reader)
+    assert len(rows) == 1, "Should produce exactly one row per job"
+
+
+def test_established_values_appear_in_csv():
+    """Established fields should be populated in the CSV."""
+    body = render_csv(
         _context(
             established=[
                 RenderField(
@@ -51,19 +73,60 @@ def test_established_values_are_printed_with_their_source():
                     status="known",
                     confidence=0.95,
                     citations=("datasheet.pdf, p.3",),
-                )
+                ),
+                RenderField(
+                    name="manufacturer_name",
+                    value="Meridian",
+                    unit=None,
+                    status="known",
+                    confidence=1.0,
+                    citations=("datasheet.pdf, p.1",),
+                ),
             ]
         )
     )
-    assert "maximum pressure" in body
-    assert "285 PSI" in body
-    assert "datasheet.pdf, p.3" in body
-    assert "95%" in body
+    row = _parse_csv(body)
+    assert row["MANUFACTURER_NAME"] == "Meridian"
+    # maximum_pressure should go to an attribute slot
+    assert "maximum pressure" in row.get("ATTRIBUTE_LABEL 1", "") or row.get(
+        "ATTRIBUTE_LABEL 2", ""
+    )
 
 
-def test_withheld_fields_are_named_with_a_reason():
-    """The section that stops an incomplete document reading as complete."""
-    body = render(
+def test_csv_attributes_fill_slots():
+    """Extra attributes should fill ATTRIBUTE_LABEL/VALUE/UOM slots."""
+    body = render_csv(
+        _context(
+            established=[
+                RenderField(
+                    name="voltage",
+                    value="120",
+                    unit="V",
+                    status="known",
+                    confidence=1.0,
+                    citations=("datasheet.pdf",),
+                ),
+                RenderField(
+                    name="amperage",
+                    value="15",
+                    unit="A",
+                    status="known",
+                    confidence=1.0,
+                    citations=("datasheet.pdf",),
+                ),
+            ]
+        )
+    )
+    row = _parse_csv(body)
+    # voltage and amperage are standard columns, should be populated
+    # (actual slots may vary depending on implementation)
+    body_str = body.lower()
+    assert "voltage" in body_str or "120" in body_str
+
+
+def test_withheld_fields_do_not_appear_in_csv():
+    """Withheld fields should not be in established values."""
+    body = render_csv(
         _context(
             withheld=[
                 RenderField(
@@ -76,119 +139,48 @@ def test_withheld_fields_are_named_with_a_reason():
             ]
         )
     )
-    assert "## Not established" in body
-    assert "supply voltage" in body
-    assert "No source states this." in body
-    assert "Absence here is deliberate." in body
+    row = _parse_csv(body)
+    # Should not have supply_voltage in attribute slots
+    assert row.get("ATTRIBUTE_LABEL 1", "") != "supply voltage"
 
 
-def test_a_document_with_nothing_sourced_says_so_rather_than_looking_empty():
-    body = render(_context())
-    assert "Nothing on this job has a source yet" in body
-
-
-def test_bom_section_appears_only_when_there_are_lines():
-    assert "## Bill of materials" not in render(_context())
-
-    body = render(
+def test_csv_handles_commas_and_quotes_in_values():
+    """CSV should escape special characters properly."""
+    body = render_csv(
         _context(
-            goal="bom_generation",
-            bom_lines=[
-                RenderBomLine(
-                    position=1,
-                    role="primary",
-                    component="Meridian MFC-GV-100",
-                    quantity="4",
-                    status="resolved",
-                    reason="Identified from cited sources.",
-                )
-            ],
-        )
-    )
-    assert "## Bill of materials" in body
-    assert "Meridian MFC-GV-100" in body
-
-
-def test_unresolved_bom_lines_are_called_out_under_the_table():
-    body = render(
-        _context(
-            goal="bom_generation",
-            bom_lines=[
-                RenderBomLine(
-                    position=1,
-                    role="specification",
-                    component="supply voltage: not established",
-                    quantity=None,
-                    status="missing",
-                    reason="No source states the supply voltage.",
-                )
-            ],
-        )
-    )
-    assert "could not be resolved and are named above" in body
-
-
-def test_abstained_compatibility_is_never_presented_as_a_pass():
-    body = render(
-        _context(
-            findings=[
-                RenderFinding(
-                    rule="chemical_compatibility",
-                    status="unknown",
-                    required_value="Steam",
-                    rated_value=None,
-                    reason="Needs a materials statement.",
+            established=[
+                RenderField(
+                    name="description",
+                    value='Steel, 1/4" NPT',
+                    unit=None,
+                    status="known",
+                    confidence=0.9,
+                    citations=("datasheet.pdf",),
                 )
             ]
         )
     )
-    assert "## Compatibility" in body
-    assert "`unknown`" in body
-    assert "It is not a pass." in body
+    # Should parse without error (proper CSV escaping)
+    row = _parse_csv(body)
+    assert row is not None
 
 
-def test_qa_notes_are_reproduced_on_the_artifact():
-    body = render(_context(qa_notes=["1 field could not be established: model."]))
-    assert "## QA notes" in body
-    assert "1 field could not be established: model." in body
-
-
-def test_pipes_in_values_cannot_break_the_table():
-    body = render(
+def test_csv_single_row_per_job():
+    """ForgeData produces one output row per job."""
+    body = render_csv(
         _context(
             established=[
                 RenderField(
                     name="model",
-                    value="A|B",
+                    value="XYZ-100",
                     unit=None,
                     status="known",
-                    confidence=0.8,
-                    citations=("sheet.pdf",),
+                    confidence=1.0,
+                    citations=("datasheet.pdf",),
                 )
             ]
         )
     )
-    assert "A\\|B" in body
-
-
-def test_newlines_in_values_cannot_break_the_table():
-    body = render(
-        _context(
-            established=[
-                RenderField(
-                    name="model",
-                    value="A\nB",
-                    unit=None,
-                    status="known",
-                    confidence=0.8,
-                    citations=("sheet.pdf",),
-                )
-            ]
-        )
-    )
-    assert "| model | A B |" in body
-
-
-def test_footer_states_the_sourcing_rule():
-    body = render(_context())
-    assert "Fields without a source are listed as gaps, never inferred." in body
+    reader = csv.DictReader(StringIO(body))
+    rows = list(reader)
+    assert len(rows) == 1

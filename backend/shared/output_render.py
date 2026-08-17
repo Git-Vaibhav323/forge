@@ -1,24 +1,16 @@
 """Render the final artifact (M8). Pure functions — no DB, no network.
 
-Markdown, deliberately. A datasheet built from cited evidence should be
-readable as plain text and diffable, and it needs no rendering dependency
-(reportlab / python-docx) to exist. Swapping the writer for PDF later touches
-this module only — everything above it works in `RenderContext`.
-
-The document always carries two tables:
-
-  * **Established** — values that may be stated, each with the document and
-    page it came from; and
-  * **Not established** — every field that was withheld, and why.
-
-The second table is the point. A generated datasheet that silently omits the
-field it could not source reads as complete when it is not.
+CSV output in Unilog format (252 columns). Maps ForgeData attributes to
+Unilog's standard wide-format schema. All established values are populated;
+withheld fields are left blank.
 """
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
+from io import StringIO
 
 # Mirrors PROJECT_GOAL_LABELS in lib/types.ts.
 GOAL_TITLES: dict[str, str] = {
@@ -102,7 +94,7 @@ def goal_title(goal: str) -> str:
 
 
 def output_filename(goal: str, project_id: str) -> str:
-    return f"{goal}_{project_id}.md"
+    return f"{goal}_{project_id}.csv"
 
 
 def render(context: RenderContext) -> str:
@@ -217,3 +209,139 @@ def render(context: RenderContext) -> str:
     lines.append("")
 
     return "\n".join(lines)
+
+
+def render_csv(context: RenderContext) -> str:
+    """Build CSV in Unilog format (252 columns). Maps ForgeData attributes."""
+    output = StringIO()
+
+    # Unilog header row (252 columns)
+    headers = [
+        "MFR URL", "Ref URL 1", "Ref URL 2", "Ref URL 3", "Ref URL 4", "Ref URL 5",
+        "PART_NUMBER", "Dept", "Class", "Fine", "SKU - MY_PART_NUMBER",
+        "Mfg_Part_Num", "Part_Desc", "E1_Brand", "Unilog_Brand", "DIB_Brand",
+        "Part_Manuf", "MANUFACTURER_NAME", "BRAND_NAME", "TRADE_NAME",
+        "MANUFACTURER_PART_NUMBER", "ALTERNATE_PART_NUMBER", "Classpath",
+        "MOBILE_DESC", "INVOICE_DESC", "SHORT_DESC", "LONG_DESC1", "RETAIL_DESC",
+        "MARKETING_DESCRIPTION",
+        # Features
+        *[f"ITEM_FEATURES_{i}" for i in range(1, 21)],
+        # Approvals
+        "With", "Standard/Approvals", "Prop 65", "Application", "Includes",
+        "Product Name",
+        # Attributes: 50 slots of (LABEL, VALUE, UOM)
+        *[col for i in range(1, 51) for col in [
+            f"ATTRIBUTE_LABEL {i}", f"ATTRIBUTE_VALUE {i}", f"ATTRIBUTE_UOM {i}"
+        ]],
+        # Codes
+        "UPC", "EAN", "GTIN", "UNSPSC",
+        # Pricing & packaging
+        "Warranty", "List Price", "Selling Qty", "Selling UOM",
+        "Standard Packaging Information",
+        # Dimensions
+        "LENGTH", "LENGTH_UOM", "HEIGHT", "HEIGHT_UOM", "WIDTH", "WIDTH_UOM",
+        "WEIGHT", "WEIGHT_UOM", "VOLUME", "VOLUME_UOM",
+        # Images & documents
+        "Product Image", "Alternate Image 1", "Alternate Image 2",
+        "Alternate Image 3", "Alternate Image 4",
+        "SDS", "SDS_1", "Warranty Information", "Catalog",
+        "Specification Sheet", "Instruction/Installation Manual", "Service Manual",
+        "Owners/User Manual", "Line Drawing", "MTR", "RoHS",
+        "Full Engineering Drawing", "Energy Star Guide", "Technical Bulletin",
+        "Submittal", "Compatibility Chart", "Size Chart", "Product Label/Insert",
+        "Video Link", "Video Link 1",
+        # Metadata
+        "Country Of Origin", "Discontinued", "Actual Image (Yes/No)",
+    ]
+
+    # Build value map from established fields (keyed by normalized name)
+    value_map = {}
+    for field in context.established:
+        # Store with both original name and normalized versions
+        key = field.name.lower().replace(" ", "_")
+        value_map[key] = field.value
+        value_map[field.name.lower()] = field.value
+        # Also store unit separately
+        if field.unit:
+            value_map[f"{key}_uom"] = field.unit
+
+    # Build row with smart column mapping
+    row = {}
+
+    # Reference columns — try to extract from attributes
+    row["PART_NUMBER"] = value_map.get("part_number", value_map.get("mfr_part_number", ""))
+    row["MANUFACTURER_NAME"] = value_map.get("manufacturer_name", value_map.get("manufacturer", ""))
+    row["BRAND_NAME"] = value_map.get("brand_name", value_map.get("brand", ""))
+    row["Dept"] = value_map.get("dept", value_map.get("department", ""))
+    row["Class"] = value_map.get("class", "")
+
+    # Descriptions (try to extract or use first available)
+    descriptions = [value_map.get(f"{desc}_desc", "") for desc in
+                   ["mobile", "invoice", "short", "long", "retail", "marketing"]]
+    row["MOBILE_DESC"] = descriptions[0] or value_map.get("description", "")
+    row["INVOICE_DESC"] = descriptions[1] or ""
+    row["SHORT_DESC"] = descriptions[2] or ""
+    row["LONG_DESC1"] = descriptions[3] or ""
+    row["RETAIL_DESC"] = descriptions[4] or ""
+    row["MARKETING_DESCRIPTION"] = descriptions[5] or ""
+
+    # Electrical ratings (first slots)
+    slot = 1
+    if "voltage" in value_map:
+        row["ATTRIBUTE_LABEL 1"] = "Voltage"
+        row["ATTRIBUTE_VALUE 1"] = value_map.get("voltage", "")
+        row["ATTRIBUTE_UOM 1"] = value_map.get("voltage_uom", "V")
+        slot = 2
+    if "amperage" in value_map:
+        row[f"ATTRIBUTE_LABEL {slot}"] = "Amperage"
+        row[f"ATTRIBUTE_VALUE {slot}"] = value_map.get("amperage", "")
+        row[f"ATTRIBUTE_UOM {slot}"] = value_map.get("amperage_uom", "A")
+        slot += 1
+
+    # Attributes (slot N with LABEL/VALUE/UOM triplets)
+    attr_count = 0
+    for field in context.established:
+        if slot + attr_count > 50:
+            break
+        # Skip if this is a known column header, only store extras as attributes
+        if not _is_standard_column(field.name):
+            current_slot = slot + attr_count
+            row[f"ATTRIBUTE_LABEL {current_slot}"] = _label(field.name)
+            row[f"ATTRIBUTE_VALUE {current_slot}"] = field.value
+            row[f"ATTRIBUTE_UOM {current_slot}"] = field.unit or ""
+            attr_count += 1
+
+    # Dimensions
+    for dim in ["length", "height", "width", "weight", "volume"]:
+        if f"{dim}_uom" in value_map:
+            row[f"{dim.upper()}"] = value_map.get(dim, "")
+            row[f"{dim.upper()}_UOM"] = value_map.get(f"{dim}_uom", "")
+
+    # Safety & compliance
+    if "certification" in value_map:
+        row["Standard/Approvals"] = value_map.get("certification", "")
+
+    # Country of origin
+    row["Country Of Origin"] = value_map.get("country_of_origin", "")
+    row["Discontinued"] = "Yes" if value_map.get("discontinued", "").lower() in ["yes", "true"] else ""
+
+    # Write CSV header
+    writer = csv.DictWriter(output, fieldnames=headers, extrasaction='ignore')
+    writer.writeheader()
+
+    # Write single data row (ForgeData produces one output per job)
+    writer.writerow({h: row.get(h, "") for h in headers})
+
+    return output.getvalue()
+
+
+def _is_standard_column(field_name: str) -> bool:
+    """Check if a field name is a standard Unilog column (not an extra attribute)."""
+    standard_cols = {
+        "part_number", "manufacturer_name", "brand_name", "dept", "class",
+        "mobile_desc", "invoice_desc", "short_desc", "long_desc", "retail_desc",
+        "marketing_description", "voltage", "amperage", "certification",
+        "country_of_origin", "discontinued", "weight", "height", "width",
+        "length", "volume",
+    }
+    return field_name.lower().replace(" ", "_") in standard_cols

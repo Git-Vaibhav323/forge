@@ -23,7 +23,7 @@ from shared.output_render import (
     RenderField,
     RenderFinding,
     output_filename,
-    render,
+    render_csv,
 )
 from shared.qa import PUBLISHABLE_STATUSES, QaResult, evaluate
 from shared.relationship_sync import resolve_relationships
@@ -289,7 +289,7 @@ def generate_output(
             filename=filename,
             status="qa_failed",
             storage_key=None,
-            content_type="text/markdown",
+            content_type="text/csv",
             size_bytes=None,
             qa_notes_json=json.dumps(qa.notes),
             generated_at=None,
@@ -299,9 +299,9 @@ def generate_output(
         db.commit()
         return row_to_output(row)
 
-    body = render(_build_context(db, project, qa, now)).encode("utf-8")
+    body = render_csv(_build_context(db, project, qa, now)).encode("utf-8")
     storage_key = _storage_key(project.id, output_id, filename)
-    _put(storage_key, body, "text/markdown; charset=utf-8")
+    _put(storage_key, body, "text/csv; charset=utf-8")
 
     row = OutputRow(
         id=output_id,
@@ -310,7 +310,7 @@ def generate_output(
         filename=filename,
         status=qa.status,
         storage_key=storage_key,
-        content_type="text/markdown; charset=utf-8",
+        content_type="text/csv; charset=utf-8",
         size_bytes=len(body),
         qa_notes_json=json.dumps(qa.notes) if qa.notes else None,
         generated_at=now,
