@@ -18,6 +18,7 @@ def configure_engine(database_url: str) -> None:
                 "pool_size": 5,
                 "max_overflow": 5,
                 "pool_recycle": 280,
+                "pool_timeout": 10,
                 "connect_args": {
                     "connect_timeout": 8,
                     "keepalives": 1,

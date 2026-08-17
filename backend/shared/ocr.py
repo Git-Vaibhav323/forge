@@ -5,6 +5,7 @@ Providers (OCR_PROVIDER), mirroring `file_service/web_fetch.py`:
   off        — default. Returns no text at all. Images are still stored and
                still listed on the job; they simply contribute no facts.
   tesseract  — local pytesseract + Pillow. Needs the tesseract binary.
+  ocrspace   — OCR.space cloud API (OCR_API_KEY from ocr.space).
   custom     — POST the image to OCR_API_URL; expects {text} or {pages}.
 
 **Off is a real answer, not a failure.** The stack must run on a clean machine
@@ -107,6 +108,57 @@ def _read_tesseract(data: bytes) -> list[str]:
     return [text]
 
 
+OCRSPACE_URL = "https://api.ocr.space/parse/image"
+
+
+def _read_ocrspace(data: bytes, filename: str) -> list[str]:
+    api_key = (settings.ocr_api_key or "").strip()
+    if not api_key:
+        raise OcrError(
+            "OCR_PROVIDER=ocrspace but OCR_API_KEY is empty.", status_code=501
+        )
+
+    import httpx
+
+    try:
+        with httpx.Client(timeout=120.0) as client:
+            response = client.post(
+                OCRSPACE_URL,
+                data={"apikey": api_key, "language": "eng", "OCREngine": "2"},
+                files={"file": (filename or "image", data)},
+            )
+    except Exception as exc:
+        raise OcrError(f"OCR.space API failed: {exc}", status_code=502) from exc
+
+    if response.status_code >= 400:
+        raise OcrError(
+            f"OCR.space returned HTTP {response.status_code}", status_code=502
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise OcrError("OCR.space returned a non-JSON response", status_code=502) from exc
+    if not isinstance(payload, dict):
+        raise OcrError("OCR.space returned an unexpected payload", status_code=502)
+    if payload.get("IsErroredOnProcessing"):
+        raw_message = payload.get("ErrorMessage") or "processing failed"
+        if isinstance(raw_message, list):
+            raw_message = "; ".join(str(part) for part in raw_message)
+        raise OcrError(f"OCR.space error: {raw_message}", status_code=502)
+
+    results = payload.get("ParsedResults") or []
+    pages: list[str] = []
+    for item in results:
+        if isinstance(item, dict):
+            text = item.get("ParsedText") or ""
+            if isinstance(text, str) and text.strip():
+                pages.append(text)
+    if not pages:
+        raise OcrError("OCR.space returned no text", status_code=502)
+    return pages
+
+
 def _read_custom(data: bytes, filename: str) -> list[str]:
     endpoint = (settings.ocr_api_url or "").strip()
     if not endpoint:
@@ -161,11 +213,13 @@ def read_image_text(data: bytes, *, filename: str = "image") -> list[str]:
 
     if provider == "tesseract":
         pages = _read_tesseract(data)
+    elif provider == "ocrspace":
+        pages = _read_ocrspace(data, filename)
     elif provider == "custom":
         pages = _read_custom(data, filename)
     else:
         raise OcrError(
-            f"Unknown OCR_PROVIDER={provider!r}. Use off, tesseract, or custom."
+            f"Unknown OCR_PROVIDER={provider!r}. Use off, tesseract, ocrspace, or custom."
         )
 
     cleaned = [clean_text(page) for page in pages]

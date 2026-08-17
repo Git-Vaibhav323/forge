@@ -38,7 +38,9 @@ const USE_MOCK = !API_BASE;
 // feels instant instead of re-hitting a remote DB each time.
 const inflight = new Map<string, Promise<unknown>>();
 const cache = new Map<string, { value: unknown; ts: number }>();
-const DEFAULT_TTL = 4000;
+const requestGen = new Map<string, number>();
+const DEFAULT_TTL = 15000;
+const HEAVY_READ_TTL = 30000;
 
 function cachedGet<T>(key: string, fn: () => Promise<T>, ttl = DEFAULT_TTL): Promise<T> {
   const hit = cache.get(key);
@@ -47,26 +49,39 @@ function cachedGet<T>(key: string, fn: () => Promise<T>, ttl = DEFAULT_TTL): Pro
   }
   const existing = inflight.get(key);
   if (existing) return existing as Promise<T>;
+
+  const gen = (requestGen.get(key) ?? 0) + 1;
+  requestGen.set(key, gen);
+
   const pending = fn()
     .then((value) => {
-      cache.set(key, { value, ts: Date.now() });
+      if (requestGen.get(key) === gen) {
+        cache.set(key, { value, ts: Date.now() });
+      }
       return value;
     })
-    .finally(() => inflight.delete(key));
+    .finally(() => {
+      if (requestGen.get(key) === gen) {
+        inflight.delete(key);
+      }
+    });
   inflight.set(key, pending);
   return pending;
 }
 
-function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  return cachedGet(key, fn);
+function dedupe<T>(key: string, fn: () => Promise<T>, ttl = DEFAULT_TTL): Promise<T> {
+  return cachedGet(key, fn, ttl);
 }
 
 function invalidateApi(prefix: string) {
-  for (const key of [...inflight.keys()]) {
-    if (key.startsWith(prefix)) inflight.delete(key);
-  }
   for (const key of [...cache.keys()]) {
     if (key.startsWith(prefix)) cache.delete(key);
+  }
+  for (const key of [...inflight.keys(), ...requestGen.keys()]) {
+    if (key.startsWith(prefix)) {
+      inflight.delete(key);
+      requestGen.set(key, (requestGen.get(key) ?? 0) + 1);
+    }
   }
 }
 
@@ -243,7 +258,7 @@ export async function listAttributes(projectId: string): Promise<Attribute[]> {
   }
   return cachedGet(`GET:/api/projects/${projectId}/attributes`, () =>
     http<Attribute[]>(`/api/projects/${projectId}/attributes`)
-  );
+  , HEAVY_READ_TTL);
 }
 
 /** Re-read every PDF/web source on the job and rebuild cited attributes (M4). */
@@ -315,7 +330,7 @@ export async function listQuestions(projectId: string): Promise<Question[]> {
   }
   return dedupe(`GET:/api/projects/${projectId}/questions`, () =>
     http<Question[]>(`/api/projects/${projectId}/questions`)
-  );
+  , HEAVY_READ_TTL);
 }
 
 export async function answerQuestion(
@@ -347,6 +362,17 @@ export async function answerQuestion(
       const answered = questions.find((item) => item.id === questionId);
       if (answered) return answered;
     }
+    // Gateway timeout / network error — the backend may already have saved the answer.
+    if (
+      message.includes("Failed to fetch") ||
+      message.includes("504") ||
+      message.includes("502")
+    ) {
+      invalidateApi(`GET:/api/projects/${projectId}/questions`);
+      const questions = await listQuestions(projectId);
+      const answered = questions.find((item) => item.id === questionId);
+      if (answered?.status === "answered") return answered;
+    }
     throw err;
   }
 }
@@ -362,7 +388,7 @@ export async function listReviewItems(projectId: string): Promise<ReviewItem[]> 
   }
   return cachedGet(`GET:/api/projects/${projectId}/reviews`, () =>
     http<ReviewItem[]>(`/api/projects/${projectId}/reviews`)
-  );
+  , HEAVY_READ_TTL);
 }
 
 export async function submitReviewDecision(
@@ -413,7 +439,7 @@ export async function listOutputs(projectId: string): Promise<OutputArtifact[]> 
   }
   return cachedGet(`GET:/api/projects/${projectId}/outputs`, () =>
     http<OutputArtifact[]>(`/api/projects/${projectId}/outputs`)
-  );
+  , HEAVY_READ_TTL);
 }
 
 /**
@@ -423,6 +449,51 @@ export async function listOutputs(projectId: string): Promise<OutputArtifact[]> 
 export function outputDownloadUrl(output: OutputArtifact): string | undefined {
   if (!output.downloadUrl) return undefined;
   return USE_MOCK ? undefined : `${API_BASE}${output.downloadUrl}`;
+}
+
+export function outputPreviewUrl(output: OutputArtifact): string | undefined {
+  if (!output.downloadUrl) return undefined;
+  return USE_MOCK ? undefined : `${API_BASE}${output.downloadUrl.replace("/download", "/preview")}`;
+}
+
+export async function fetchOutputPreview(
+  output: OutputArtifact
+): Promise<{ content: string; filename: string }> {
+  if (USE_MOCK || !output.downloadUrl) {
+    return { content: "", filename: output.filename };
+  }
+  return http<{ content: string; filename: string }>(
+    output.downloadUrl.replace("/download", "/preview")
+  );
+}
+
+export async function downloadOutput(output: OutputArtifact): Promise<void> {
+  if (USE_MOCK || !output.downloadUrl) return;
+
+  const res = await fetch(`${API_BASE}${output.downloadUrl}`);
+  if (!res.ok) {
+    let detail =
+      res.status === 404
+        ? "This output is no longer available. Click Print again to regenerate it."
+        : `Download failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      if (typeof body.detail === "string" && body.detail.trim()) {
+        detail = body.detail;
+      }
+    } catch {
+      // Non-JSON error body — keep the default message.
+    }
+    throw new Error(detail);
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = output.filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function generateOutput(
@@ -445,6 +516,7 @@ export async function generateOutput(
   // Generating re-derives the record and can flip the job's status, so drop
   // every cached view of it.
   invalidateApi(`GET:/api/projects/${projectId}`);
+  invalidateApi(`GET:/api/projects/${projectId}/outputs`);
   invalidateApi("GET:/api/projects");
   return http<OutputArtifact>(`/api/projects/${projectId}/outputs`, {
     method: "POST",

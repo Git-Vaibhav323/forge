@@ -47,10 +47,8 @@ def row_to_review_item(row: ReviewItemRow) -> ReviewItem:
 
 
 def list_review_items(db: Session, project: ProjectRow) -> list[ReviewItem]:
-    """Reconcile against the current record, then return the queue."""
+    """Return the review queue, reconciled against the current record."""
     sync_reviews(db, project)
-    db.commit()
-
     rows = db.scalars(
         select(ReviewItemRow)
         .where(ReviewItemRow.project_id == project.id)

@@ -91,8 +91,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
 
 _COMPILED = [(spec, re.compile(spec.pattern, re.IGNORECASE)) for spec in FIELD_SPECS]
 
-# Fields whose risk is safety-critical regardless of source count.
-HIGH_RISK = {"maximum_pressure", "supply_voltage", "max_temperature", "connection_standard"}
+from shared.risk import HIGH_RISK_FIELDS as HIGH_RISK
 
 
 @dataclass

@@ -180,16 +180,18 @@ def derive_variants(db: Session, project: ProjectRow) -> int:
         )
     )
 
+    mine_map = _identity(db, [project.id])
+    mine = mine_map.get(project.id)
+    if mine is None:
+        db.flush()
+        return 0
+
     candidates = list(
         db.scalars(
             select(ProjectRow.id).where(ProjectRow.category == project.category)
         ).all()
     )
     identities = _identity(db, candidates)
-    mine = identities.get(project.id)
-    if mine is None:
-        db.flush()
-        return 0
 
     now = datetime.now(timezone.utc)
     linked = 0

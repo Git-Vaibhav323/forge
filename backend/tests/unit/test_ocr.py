@@ -84,6 +84,48 @@ def test_custom_provider_without_a_url_explains_itself(
     assert "OCR_API_URL" in str(excinfo.value)
 
 
+def test_ocrspace_without_api_key_explains_itself(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("shared.ocr.settings.ocr_provider", "ocrspace")
+    monkeypatch.setattr("shared.ocr.settings.ocr_api_key", None)
+    with pytest.raises(OcrError) as excinfo:
+        read_image_text(b"bytes", filename="plate.png")
+    assert excinfo.value.status_code == 501
+    assert "OCR_API_KEY" in str(excinfo.value)
+
+
+def test_ocrspace_parses_api_response(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("shared.ocr.settings.ocr_provider", "ocrspace")
+    monkeypatch.setattr("shared.ocr.settings.ocr_api_key", "test-key")
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "IsErroredOnProcessing": False,
+                "ParsedResults": [{"ParsedText": "Model:   MFC-GV-100\nMax Pressure: 285 PSI"}],
+            }
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, data, files):
+            assert data["apikey"] == "test-key"
+            return FakeResponse()
+
+    monkeypatch.setattr("httpx.Client", lambda **kwargs: FakeClient())
+    assert read_image_text(b"png-bytes", filename="plate.png") == [
+        "Model: MFC-GV-100\nMax Pressure: 285 PSI"
+    ]
+
+
 def test_provider_output_is_cleaned_before_it_reaches_extraction(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -101,3 +143,60 @@ def test_pages_that_clean_to_nothing_are_dropped(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr("shared.ocr.settings.ocr_provider", "tesseract")
     monkeypatch.setattr("shared.ocr._read_tesseract", lambda data: ["   \n\n ", "Model: X"])
     assert read_image_text(b"bytes", filename="plate.png") == ["Model: X"]
+
+
+def test_ocrspace_rejects_non_json_response(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("shared.ocr.settings.ocr_provider", "ocrspace")
+    monkeypatch.setattr("shared.ocr.settings.ocr_api_key", "test-key")
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            raise ValueError("not json")
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, data, files):
+            return FakeResponse()
+
+    monkeypatch.setattr("httpx.Client", lambda **kwargs: FakeClient())
+    with pytest.raises(OcrError, match="non-JSON response") as excinfo:
+        read_image_text(b"png-bytes", filename="plate.png")
+    assert excinfo.value.status_code == 502
+
+
+def test_ocrspace_joins_list_error_messages(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("shared.ocr.settings.ocr_provider", "ocrspace")
+    monkeypatch.setattr("shared.ocr.settings.ocr_api_key", "test-key")
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "IsErroredOnProcessing": True,
+                "ErrorMessage": ["page 1 failed", "page 2 failed"],
+            }
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, data, files):
+            return FakeResponse()
+
+    monkeypatch.setattr("httpx.Client", lambda **kwargs: FakeClient())
+    with pytest.raises(OcrError, match="page 1 failed; page 2 failed") as excinfo:
+        read_image_text(b"png-bytes", filename="plate.png")
+    assert excinfo.value.status_code == 502

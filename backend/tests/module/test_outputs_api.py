@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
@@ -11,13 +12,13 @@ NOW = datetime.now(timezone.utc)
 
 
 def _project(
-    db: Session, project_id: str, *, goal: str = "product_datasheet"
+    db: Session, project_id: str, *, goal: str = "product_datasheet", category: str = "other"
 ) -> ProjectRow:
     row = ProjectRow(
         id=project_id,
         name=f"Job {project_id}",
         goal=goal,
-        category="valve",
+        category=category,
         status="draft",
         completion_score=0,
         blocking_fields_count=0,
@@ -76,7 +77,7 @@ def _cited(
 def _printable_job(db: Session, project_id: str = "prj-out01") -> str:
     """A job with one fully cited field and nothing in dispute."""
     _project(db, project_id)
-    _cited(db, project_id, "attr-o1", "maximum_pressure", "285", unit="PSI")
+    _cited(db, project_id, "attr-o1", "key_rating", "285 PSI max operating pressure")
     db.commit()
     return project_id
 
@@ -96,7 +97,7 @@ def test_generate_writes_a_real_artifact(
     ).json()
 
     assert body["status"] in {"qa_passed", "generated"}
-    assert body["filename"] == f"product_datasheet_{project_id}.csv"
+    assert body["filename"] == f"product_datasheet_{project_id}.pdf"
     assert body["downloadUrl"] == f"/api/outputs/{body['id']}/download"
     assert body["sizeBytes"] > 0
     assert body["generatedAt"] is not None
@@ -112,12 +113,11 @@ def test_the_artifact_contains_the_cited_value_and_its_source(
 
     response = generation_client.get(f"/api/outputs/{created['id']}/download")
     assert response.status_code == 200
-    text = response.text
+    assert response.content.startswith(b"%PDF")
 
-    # CSV output should contain the value (285 PSI is parsed as "285" value with "PSI" unit)
-    assert "285" in text
-    # CSV format should be parseable
-    assert "," in text  # CSV delimiter
+    preview = generation_client.get(f"/api/outputs/{created['id']}/preview").json()
+    assert "285" in preview["content"]
+    assert "## Executive summary" in preview["content"]
 
 
 def test_download_is_served_as_a_named_attachment(
@@ -131,7 +131,8 @@ def test_download_is_served_as_a_named_attachment(
     response = generation_client.get(f"/api/outputs/{created['id']}/download")
     disposition = response.headers["content-disposition"]
     assert disposition.startswith("attachment;")
-    assert f"product_datasheet_{project_id}.csv" in disposition
+    assert f"product_datasheet_{project_id}.pdf" in disposition
+    assert response.headers["content-type"].startswith("application/pdf")
 
 
 def test_generate_defaults_to_the_job_goal(
@@ -171,6 +172,28 @@ def test_downloading_an_unknown_output_is_404(generation_client: TestClient) -> 
     assert (
         generation_client.get("/api/outputs/out-nope/download").status_code == 404
     )
+
+
+def test_downloading_a_missing_storage_object_requires_regeneration(
+    generation_client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from services.file_service.storage import ObjectNotFoundError
+
+    project_id = _printable_job(db_session)
+    created = generation_client.post(
+        f"/api/projects/{project_id}/outputs", json={"type": "product_datasheet"}
+    ).json()
+
+    def _missing(_key: str) -> bytes:
+        raise ObjectNotFoundError(_key)
+
+    monkeypatch.setattr(
+        "services.generation_service.repository._get", _missing
+    )
+
+    response = generation_client.get(f"/api/outputs/{created['id']}/download")
+    assert response.status_code == 409
+    assert "no longer available" in response.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +258,8 @@ def test_a_pending_hold_blocks_the_print(
 ) -> None:
     """A missing safety-critical field becomes a hold, and a hold blocks printing."""
     project_id = "prj-out04"
-    _project(db_session, project_id)
+    _project(db_session, project_id, goal="product_configuration")
+    _cited(db_session, project_id, "attr-ok", "maximum_pressure", "285", unit="PSI")
     _cited(
         db_session,
         project_id,
@@ -249,7 +273,7 @@ def test_a_pending_hold_blocks_the_print(
     db_session.commit()
 
     body = generation_client.post(
-        f"/api/projects/{project_id}/outputs", json={"type": "product_datasheet"}
+        f"/api/projects/{project_id}/outputs", json={"type": "product_configuration"}
     ).json()
 
     assert body["status"] == "qa_failed"
@@ -262,6 +286,7 @@ def test_a_value_with_no_citation_is_never_stated_as_fact(
     """Status alone is not enough — a fact needs a source behind it."""
     project_id = "prj-out05"
     _project(db_session, project_id)
+    _cited(db_session, project_id, "attr-ok", "key_rating", "Headline spec for publish")
     _cited(
         db_session,
         project_id,
@@ -275,11 +300,12 @@ def test_a_value_with_no_citation_is_never_stated_as_fact(
     created = generation_client.post(
         f"/api/projects/{project_id}/outputs", json={"type": "product_datasheet"}
     ).json()
-    text = generation_client.get(f"/api/outputs/{created['id']}/download").text
+    preview = generation_client.get(f"/api/outputs/{created['id']}/preview").json()
 
-    # CSV format: uncited values should not appear in the main columns
-    # (they would only appear if they had evidence)
-    assert "MFC-GV-100" not in text or "model" not in text  # Not both present together
+    # Uncited values are listed as gaps, never as established facts.
+    assert "model" in preview["content"]
+    assert "### Not established" in preview["content"]
+    assert "MFC-GV-100" not in preview["content"]
 
 
 def test_gaps_warn_but_still_produce_a_document(
@@ -287,7 +313,7 @@ def test_gaps_warn_but_still_produce_a_document(
 ) -> None:
     project_id = "prj-out06"
     _project(db_session, project_id)
-    _cited(db_session, project_id, "attr-ok", "maximum_pressure", "285", unit="PSI")
+    _cited(db_session, project_id, "attr-ok", "key_rating", "285 PSI rated")
     _cited(
         db_session,
         project_id,
@@ -305,12 +331,12 @@ def test_gaps_warn_but_still_produce_a_document(
 
     assert body["status"] == "generated"  # printable, with caveats
     assert body["downloadUrl"] is not None
-    # QA notes should warn about gaps even in CSV format
+    # QA notes should warn about gaps in the report metadata.
     assert any("gap" in note.lower() for note in body["qaNotes"])
 
-    text = generation_client.get(f"/api/outputs/{body['id']}/download").text
-    # CSV format should be valid
-    assert "," in text  # CSV contains commas
+    preview = generation_client.get(f"/api/outputs/{body['id']}/preview").json()
+    assert "## Executive summary" in preview["content"]
+    assert "### Not established" in preview["content"]
 
 
 def test_generation_marks_the_job_generated(
@@ -362,9 +388,12 @@ def test_a_bom_job_prints_its_resolved_lines(
     generation_client: TestClient, db_session: Session
 ) -> None:
     project_id = "prj-out09"
-    _project(db_session, project_id, goal="bom_generation")
+    _project(db_session, project_id, goal="bom_generation", category="other")
+    _cited(db_session, project_id, "attr-app", "application", "Spare parts order")
+    _cited(db_session, project_id, "attr-med", "operating_medium", "Physical environment")
     _cited(db_session, project_id, "attr-mfr", "manufacturer", "Meridian")
     _cited(db_session, project_id, "attr-mdl", "model", "MFC-GV-100")
+    _cited(db_session, project_id, "attr-conn", "connection_standard", "NPT")
     db_session.commit()
 
     created = generation_client.post(
@@ -373,10 +402,11 @@ def test_a_bom_job_prints_its_resolved_lines(
 
     # Gaps in the BOM are warnings, not blockers.
     assert created["downloadUrl"] is not None
+    assert created["filename"] == f"bom_generation_{project_id}.csv"
     text = generation_client.get(f"/api/outputs/{created['id']}/download").text
-    # CSV format should contain the manufacturer and model data
     assert "Meridian" in text
     assert "MFC-GV-100" in text
+    assert "job_id" in text
 
 
 def test_deleting_the_output_row_leaves_no_orphan_listing(

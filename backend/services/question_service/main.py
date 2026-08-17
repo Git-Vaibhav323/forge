@@ -22,13 +22,8 @@ app.include_router(questions.router)
 
 @app.get("/health", tags=["meta"])
 def health() -> dict:
-    from shared.llm_ranker import LlmSettings
-    from services.question_service.config import settings as s
-
-    llm = LlmSettings(provider=s.llm_provider, api_key=s.llm_api_key, model=s.llm_model)
     return {
         "status": "ok",
         "service": "question-service",
-        "llm": s.llm_provider if llm.enabled else "off",
-        "questionEngine": "hybrid",
+        "questionEngine": "rules",
     }

@@ -19,12 +19,12 @@ class ConditionalRule:
 CONDITIONAL_RULES: tuple[ConditionalRule, ...] = (
     ConditionalRule(
         when_field="installation_environment",
-        when_values=frozenset({"hazardous area"}),
+        when_values=frozenset({"regulated / restricted", "hazardous area"}),
         require_fields=("hazardous_area_class",),
     ),
     ConditionalRule(
         when_field="operating_medium",
-        when_values=frozenset({"steam", "chemical"}),
+        when_values=frozenset({"physical environment", "steam", "chemical"}),
         require_fields=("max_temperature",),
     ),
     ConditionalRule(
@@ -34,7 +34,9 @@ CONDITIONAL_RULES: tuple[ConditionalRule, ...] = (
     ),
     ConditionalRule(
         when_field="fail_safe_mode",
-        when_values=frozenset({"stay open (normally open)"}),
+        when_values=frozenset(
+            {"stay open (normally open)", "fail open", "keep last state"}
+        ),
         require_fields=("return_spring_required",),
     ),
 )

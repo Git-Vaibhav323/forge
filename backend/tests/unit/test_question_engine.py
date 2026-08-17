@@ -11,7 +11,6 @@ from shared.question_engine import (
     pick_next_question,
     user_answers_map,
 )
-from shared.llm_ranker import LlmSettings
 
 
 def _attr(
@@ -52,7 +51,7 @@ def test_evidence_prefill_skips_known_fields() -> None:
         user_answers={},
     )
     specs = active_required_fields(ctx.goal, ctx.category, ctx.merged_answers)
-    nxt = pick_next_question(ctx, LlmSettings(provider="off", api_key=None))
+    nxt = pick_next_question(ctx)
     assert nxt is not None
     assert nxt.spec.field not in {"manufacturer", "model"}
 
@@ -64,15 +63,15 @@ def test_conflicting_evidence_does_not_prefill() -> None:
 
 
 def test_conditional_rule_adds_hazardous_class() -> None:
-    answers = {"installation_environment": "Hazardous area"}
-    specs = active_required_fields("product_configuration", "valve", answers)
+    answers = {"installation_environment": "Regulated / restricted"}
+    specs = active_required_fields("product_configuration", "Software or app", answers)
     fields = {s.field for s in specs}
     assert "hazardous_area_class" in fields
 
 
-def test_conditional_rule_steam_adds_max_temperature() -> None:
-    answers = {"operating_medium": "Steam"}
-    specs = active_required_fields("product_configuration", "valve", answers)
+def test_conditional_rule_physical_environment_adds_max_temperature() -> None:
+    answers = {"operating_medium": "Physical environment"}
+    specs = active_required_fields("product_configuration", "Physical product", answers)
     assert "max_temperature" in {s.field for s in specs}
 
 
@@ -105,7 +104,7 @@ def test_goal_fields_asked_before_common() -> None:
         conflicting_fields=(),
         user_answers={},
     )
-    nxt = pick_next_question(ctx, LlmSettings(provider="off", api_key=None))
+    nxt = pick_next_question(ctx)
     assert nxt is not None
     assert nxt.spec.field in {"existing_part_number", "reason_for_replacement"}
 
@@ -121,6 +120,6 @@ def test_pick_next_without_llm_uses_priority() -> None:
         conflicting_fields=(),
         user_answers={},
     )
-    nxt = pick_next_question(ctx, LlmSettings(provider="off", api_key=None))
+    nxt = pick_next_question(ctx)
     assert nxt is not None
     assert nxt.spec.priority == "critical"

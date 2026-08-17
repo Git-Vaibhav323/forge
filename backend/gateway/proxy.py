@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+import logging
+
 import httpx
 from fastapi import APIRouter, Request, Response
 
 from gateway.config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _client = httpx.AsyncClient(
     timeout=15.0,
@@ -36,7 +40,8 @@ async def proxy_project_sources(project_id: str, request: Request) -> Response:
 
 @router.api_route("/api/projects/{project_id}/questions", methods=["GET", "OPTIONS"])
 async def proxy_project_questions(project_id: str, request: Request) -> Response:
-    return await _forward(request, settings.question_service_url)
+    # ensure_open_question may call the optional LLM planner.
+    return await _forward(request, settings.question_service_url, timeout=60.0)
 
 
 @router.api_route("/api/projects/{project_id}/attributes", methods=["GET", "OPTIONS"])
@@ -78,6 +83,11 @@ async def proxy_output_download(output_id: str, request: Request) -> Response:
     return await _forward(request, settings.generation_service_url, timeout=60.0)
 
 
+@router.api_route("/api/outputs/{output_id}/preview", methods=["GET", "OPTIONS"])
+async def proxy_output_preview(output_id: str, request: Request) -> Response:
+    return await _forward(request, settings.generation_service_url, timeout=60.0)
+
+
 @router.api_route(
     "/api/projects/{project_id}/questions/{question_id}/answer",
     methods=["POST", "OPTIONS"],
@@ -85,7 +95,8 @@ async def proxy_output_download(output_id: str, request: Request) -> Response:
 async def proxy_project_question_answer(
     project_id: str, question_id: str, request: Request
 ) -> Response:
-    return await _forward(request, settings.question_service_url)
+    # Answer + record sync + next-question LLM can exceed the default proxy budget.
+    return await _forward(request, settings.question_service_url, timeout=60.0)
 
 
 async def _forward(request: Request, upstream_base: str, timeout: float = 15.0) -> Response:
@@ -103,13 +114,22 @@ async def _forward(request: Request, upstream_base: str, timeout: float = 15.0) 
     }
     body = await request.body()
 
-    upstream = await _client.request(
-        request.method,
-        url,
-        headers=headers,
-        content=body,
-        timeout=timeout,
-    )
+    try:
+        upstream = await _client.request(
+            request.method,
+            url,
+            headers=headers,
+            content=body,
+            timeout=timeout,
+        )
+    except httpx.TimeoutException:
+        return _error_response(
+            504,
+            "Upstream service timed out. Try again — the answer may already be saved.",
+        )
+    except httpx.RequestError as exc:
+        logger.exception("Upstream request failed for %s %s", request.method, url)
+        return _error_response(502, "Upstream service unavailable.")
 
     # Content-Disposition must survive the hop or a download arrives unnamed
     # and renders inline instead of saving (M8).
@@ -123,4 +143,13 @@ async def _forward(request: Request, upstream_base: str, timeout: float = 15.0) 
         status_code=upstream.status_code,
         media_type=upstream.headers.get("content-type"),
         headers=passthrough or None,
+    )
+
+
+def _error_response(status_code: int, detail: str) -> Response:
+    """JSON error bodies so CORS middleware can attach headers on proxy failures."""
+    return Response(
+        content=json.dumps({"detail": detail}),
+        status_code=status_code,
+        media_type="application/json",
     )

@@ -1,40 +1,57 @@
 """Canonical risk classification — one list, used by every service.
 
-The governance rule in context.md is non-negotiable: conflicts, high-risk
-fields (voltage, pressure, temperature, chemical compatibility, safety certs),
-bulk corrections, and published-data changes ALWAYS pause for a human.
-
-Before this module the high-risk set was duplicated in
-`services/evidence_service/extraction.py` (extraction-time, tied to
-FIELD_SPECS) and `shared/record_sync.py`. `record_sync` and review-service now
-share the list below; `extraction.HIGH_RISK` stays separate because it is
-scoped to the regex specs it sits next to.
+Hold triggers follow the job schema (goal + work type + answers), not a fixed
+industrial field list. Voltage and pressure still matter on plant jobs; platform
+and scope matter on software and service jobs.
 """
 
 from __future__ import annotations
 
-# Fields that always require a human decision when they conflict or are absent.
-HIGH_RISK_FIELDS: frozenset[str] = frozenset(
-    {
-        "maximum_pressure",
-        "supply_voltage",
-        "max_temperature",
-        "connection_standard",
-        "hazardous_area_class",
-        "chemical_compatibility",
-    }
-)
+from shared.completeness import all_critical_field_names
+
+# Extraction-time fallback when full job context is unavailable.
+HIGH_RISK_FIELDS: frozenset[str] = all_critical_field_names()
 
 # Ranked worst-first so `max` comparisons read naturally.
 SEVERITY_ORDER: tuple[str, ...] = ("low", "medium", "high", "critical")
 
 
+def critical_fields_for_job(
+    goal: str,
+    category: str,
+    answers: dict[str, str] | None = None,
+) -> frozenset[str]:
+    """Fields that must be sourced or explicitly decided before printing."""
+    from shared.field_registry import active_required_fields
+
+    specs = active_required_fields(goal, category, answers or {})
+    return frozenset(spec.field for spec in specs if spec.priority == "critical")
+
+
+def requires_review_hold(
+    field: str,
+    goal: str,
+    category: str,
+    answers: dict[str, str] | None = None,
+) -> bool:
+    return field in critical_fields_for_job(goal, category, answers)
+
+
 def is_high_risk(field: str) -> bool:
+    """True when a field can be critical on some job type (extraction fallback)."""
     return field in HIGH_RISK_FIELDS
 
 
-def risk_for_field(field: str) -> str:
+def risk_for_field(
+    field: str,
+    *,
+    goal: str = "",
+    category: str = "",
+    answers: dict[str, str] | None = None,
+) -> str:
     """Baseline risk when we have no extraction-time signal (e.g. user answers)."""
+    if goal and requires_review_hold(field, goal, category, answers):
+        return "critical"
     return "critical" if is_high_risk(field) else "low"
 
 

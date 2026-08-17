@@ -14,6 +14,16 @@ from shared.db.session import configure_engine
 TEST_DATABASE_URL = __import__("os").environ.get("TEST_DATABASE_URL", "sqlite+pysqlite:///:memory:")
 
 
+@pytest.fixture(autouse=True)
+def _reset_llm_health() -> Generator[None, None, None]:
+    # The planner mutes itself after repeated failures; that state is global.
+    from shared.llm_ranker import reset_llm_health
+
+    reset_llm_health()
+    yield
+    reset_llm_health()
+
+
 @pytest.fixture(scope="session")
 def engine():
     if TEST_DATABASE_URL.startswith("sqlite"):
@@ -151,13 +161,22 @@ def generation_client(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> Generator[TestClient, None, None]:
     # Artifact bytes are kept in memory so the suite needs no object storage.
+    from services.file_service.storage import ObjectNotFoundError
+
     store: dict[str, bytes] = {}
+
+    def _get(key: str) -> bytes:
+        try:
+            return store[key]
+        except KeyError as exc:
+            raise ObjectNotFoundError(key) from exc
+
     monkeypatch.setattr(
         "services.generation_service.repository._put",
         lambda key, data, content_type: store.__setitem__(key, data),
     )
     monkeypatch.setattr(
-        "services.generation_service.repository._get", lambda key: store[key]
+        "services.generation_service.repository._get", _get
     )
     monkeypatch.setattr(
         "services.generation_service.repository._remove",

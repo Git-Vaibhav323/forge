@@ -9,7 +9,7 @@ Three jobs, in this order (see `sync_reviews`):
    (project_id, field) precisely so they survive that.
 
 2. **Derive** open items from the current attribute record. A field is a hold
-   when two sources disagree, or when a safety-critical field has no evidence.
+   when two sources disagree, or when a required critical field has no evidence.
 
 3. **Recompute** `conflicts_count` and `pending_approvals_count` on the job.
    These are the numbers the dashboard, the Review tab badge, and the Outputs
@@ -37,7 +37,8 @@ from shared.db.models import (
     ReviewItemRow,
 )
 from shared.normalization import values_agree
-from shared.risk import escalate, is_high_risk
+from shared.risk import escalate, requires_review_hold
+from shared.question_engine import list_question_rows, user_answers_map
 
 REVIEW_DOC_ID = "review-decision"
 REVIEW_DOC_NAME = "Reviewer decision (Review tab)"
@@ -49,7 +50,7 @@ APPLIED_STATUSES = frozenset({"approved", "edited"})
 
 # Attribute statuses that mean a human already settled the field.
 SETTLED_STATUSES = frozenset({"verified", "not_applicable"})
-# Statuses that make an absent safety-critical field a hold.
+# Statuses that make an absent critical field a hold.
 ABSENT_STATUSES = frozenset({"missing", "needs_review", "unverified"})
 
 
@@ -225,7 +226,12 @@ def _field_label(name: str) -> str:
 
 
 def _classify(
-    attr: AttributeRow, rows: list[AttributeEvidenceRow]
+    attr: AttributeRow,
+    rows: list[AttributeEvidenceRow],
+    *,
+    goal: str,
+    category: str,
+    answers: dict[str, str],
 ) -> dict | None:
     """Return the review item spec for this attribute, or None when it is fine."""
     if attr.status in SETTLED_STATUSES:
@@ -249,7 +255,7 @@ def _classify(
             "evidence_ids": [r.id for r in rows],
         }
 
-    if is_high_risk(attr.name) and attr.status in ABSENT_STATUSES:
+    if requires_review_hold(attr.name, goal, category, answers) and attr.status in ABSENT_STATUSES:
         return {
             "issue_type": "high_risk",
             "severity": escalate(attr.risk_level, "high"),
@@ -257,9 +263,9 @@ def _classify(
             "current_value": attr.raw_value or None,
             "proposed_value": None,
             "reason": (
-                "No evidence found for a safety-critical field. This cannot be "
-                "inferred from general knowledge — supply a source or record an "
-                "explicit override."
+                "No evidence found for a required critical field on this job. "
+                "This cannot be inferred from general knowledge — supply a source "
+                "or record an explicit override."
             ),
             "evidence_ids": [r.id for r in rows],
         }
@@ -271,6 +277,7 @@ def derive_review_items(db: Session, project: ProjectRow) -> None:
     """Reconcile review_items against the current attribute record."""
     attrs = _attributes(db, project.id)
     ev_map = _evidence_by_attribute(db, [a.id for a in attrs])
+    answers = user_answers_map(list_question_rows(db, project.id))
     existing = {
         row.field: row
         for row in db.scalars(
@@ -293,7 +300,13 @@ def derive_review_items(db: Session, project: ProjectRow) -> None:
             attr.confidence = 0.9
             attr.updated_at = now
 
-        spec = _classify(attr, rows)
+        spec = _classify(
+            attr,
+            rows,
+            goal=project.goal,
+            category=project.category or "",
+            answers=answers,
+        )
         if spec is None:
             continue
 

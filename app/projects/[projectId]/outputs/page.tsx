@@ -44,10 +44,10 @@ export default function OutputsPage({
       <Card>
         <CardHeader className="flex items-center justify-between">
           <div>
-            <p className="text-[13px] font-medium">Print the package</p>
+            <p className="text-[13px] font-medium">Print the report</p>
             <p className="mt-0.5 text-[12px] text-muted">
-              Built only from approved facts, answers you typed, and cited
-              evidence. Nothing else.
+              Builds a detailed markdown report from approved facts, your answers,
+              and cited evidence — with an executive summary and sourced tables.
             </p>
           </div>
           <Button variant="primary" disabled={blocked || generating} onClick={handleGenerate}>

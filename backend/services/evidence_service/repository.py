@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from services.evidence_service.extraction import (
     AttributeDraft,
@@ -15,7 +15,7 @@ from services.evidence_service.extraction import (
 )
 from shared.evidence_fields import extraction_targets
 from shared.question_engine import build_job_context, list_question_rows as list_q_rows
-from shared.record_sync import apply_user_answers_to_attributes, sync_record_from_questions
+from shared.record_sync import apply_user_answers_to_attributes
 from shared.relationship_sync import resolve_relationships
 from shared.review_sync import sync_reviews
 from shared.html_text import html_to_text
@@ -71,33 +71,28 @@ def row_to_attribute(row: AttributeRow, evidence: list[AttributeEvidenceRow]) ->
     )
 
 
-def list_attributes(db: Session, project_id: str) -> list[Attribute]:
-    project = db.get(ProjectRow, project_id)
-    if project is None:
-        return []
-    sync_record_from_questions(db, project)
-    db.commit()
-
+def _read_attributes(db: Session, project_id: str) -> list[Attribute]:
     rows = list(
         db.scalars(
             select(AttributeRow)
             .where(AttributeRow.project_id == project_id)
+            .options(selectinload(AttributeRow.evidence_rows))
             .order_by(AttributeRow.name.asc())
-        )
+        ).all()
     )
-    if not rows:
+    return [row_to_attribute(row, list(row.evidence_rows)) for row in rows]
+
+
+def list_attributes(db: Session, project_id: str) -> list[Attribute]:
+    """Return persisted attributes for a job.
+
+    This is a read-only view. Question answers are promoted to verified
+    attributes on write paths such as answer submission and extraction
+    (``apply_user_answers_to_attributes``), not during this GET.
+    """
+    if db.get(ProjectRow, project_id) is None:
         return []
-    ev_rows = list(
-        db.scalars(
-            select(AttributeEvidenceRow).where(
-                AttributeEvidenceRow.attribute_id.in_([r.id for r in rows])
-            )
-        )
-    )
-    grouped: dict[str, list[AttributeEvidenceRow]] = {}
-    for ev in ev_rows:
-        grouped.setdefault(ev.attribute_id, []).append(ev)
-    return [row_to_attribute(row, grouped.get(row.id, [])) for row in rows]
+    return _read_attributes(db, project_id)
 
 
 def _read_pdf_bytes(storage_key: str) -> bytes:
@@ -235,4 +230,4 @@ def run_extraction(db: Session, project: ProjectRow) -> list[Attribute]:
     # conflict/approval counts) is what makes "Re-scan documents" safe. (M5)
     sync_reviews(db, project)
     db.commit()
-    return list_attributes(db, project.id)
+    return _read_attributes(db, project.id)

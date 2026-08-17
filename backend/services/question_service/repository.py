@@ -4,12 +4,12 @@ import json
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from services.question_service.config import settings
-from shared.completeness import RequiredField, is_satisfied, status_for_score
-from shared.db.models import ProjectRow, QuestionRow
-from shared.llm_ranker import LlmSettings
+from shared.completeness import is_satisfied, status_for_score
+from shared.db.models import AttributeRow, ProjectRow, QuestionRow
+from shared.qa import PUBLISHABLE_STATUSES
 from shared.question_engine import (
     NextQuestion,
     build_job_context,
@@ -23,14 +23,6 @@ from shared.schemas import Question
 
 def generate_question_id() -> str:
     return f"q-{uuid.uuid4().hex[:8]}"
-
-
-def _llm_settings() -> LlmSettings:
-    return LlmSettings(
-        provider=settings.llm_provider,
-        api_key=settings.llm_api_key,
-        model=settings.llm_model,
-    )
 
 
 def _options_list(row: QuestionRow) -> list[str] | None:
@@ -88,14 +80,32 @@ def sync_completeness(db: Session, project: ProjectRow, rows: list[QuestionRow])
 
 
 def ensure_open_question(db: Session, project: ProjectRow) -> list[QuestionRow]:
-    """Hybrid: evidence pre-fill + conditional rules + LLM wording + one open Q."""
+    """Evidence pre-fill + conditional rules + one built-in question at a time."""
     rows = list_question_rows(db, project.id)
-    ctx = build_job_context(db, project, rows)
-    merged = ctx.merged_answers
     open_rows = [row for row in rows if row.status == "open"]
     dirty = False
 
-    # Drop open questions for fields already satisfied (e.g. new evidence extract).
+    # Fast path: one open question already answered by publishable evidence.
+    if len(open_rows) == 1:
+        field = open_rows[0].field
+        attr = db.scalar(
+            select(AttributeRow).where(
+                AttributeRow.project_id == project.id,
+                AttributeRow.name == field,
+            )
+        )
+        if (
+            attr is not None
+            and attr.status in PUBLISHABLE_STATUSES
+            and (attr.raw_value or "").strip()
+        ):
+            open_rows[0].status = "skipped"
+            dirty = True
+            open_rows = []
+
+    ctx = build_job_context(db, project, rows)
+    merged = ctx.merged_answers
+
     for row in open_rows:
         if is_satisfied(merged.get(row.field)):
             row.status = "skipped"
@@ -103,12 +113,9 @@ def ensure_open_question(db: Session, project: ProjectRow) -> list[QuestionRow]:
     if dirty:
         open_rows = [row for row in rows if row.status == "open"]
 
-    nxt = pick_next_question(ctx, _llm_settings())
-
-    if nxt is None:
-        if open_rows:
-            for row in open_rows:
-                row.status = "skipped"
+    if open_rows:
+        for row in open_rows[1:]:
+            row.status = "skipped"
             dirty = True
         if dirty:
             sync_completeness(db, project, rows)
@@ -116,22 +123,10 @@ def ensure_open_question(db: Session, project: ProjectRow) -> list[QuestionRow]:
             return list_question_rows(db, project.id)
         return rows
 
-    matching = [row for row in open_rows if row.field == nxt.spec.field]
-    extras = [row for row in open_rows if row.field != nxt.spec.field]
-    if extras:
-        for row in extras:
-            row.status = "skipped"
-        dirty = True
-    if not matching:
+    nxt = pick_next_question(ctx)
+    if nxt is not None:
         rows.append(_insert_open(db, project.id, nxt))
         dirty = True
-    elif matching:
-        # Refresh wording when LLM returns scenario-specific copy for same field.
-        row = matching[0]
-        if row.text != nxt.text or row.why_asked != nxt.why_asked:
-            row.text = nxt.text
-            row.why_asked = nxt.why_asked
-            dirty = True
 
     if dirty:
         sync_completeness(db, project, rows)

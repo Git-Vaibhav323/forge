@@ -219,7 +219,7 @@ Copy from `.env.example`. Required for M1–M4:
 | `CORS_ORIGINS` | `http://localhost:3000` | all services |
 | `LLM_PROVIDER` | `off` / `gemini` / `groq` | question-service (optional) |
 | `LLM_API_KEY` | API key from provider | question-service (optional) |
-| `LLM_MODEL` | e.g. `gemini-2.0-flash` | question-service (optional) |
+| `LLM_MODEL` | e.g. `gemini-3.1-flash-lite` | question-service + solution generation (optional) |
 
 **Supabase tip:** use `POSTGRES_HOST`, `POSTGRES_PASSWORD`, etc. instead of a raw
 `DATABASE_URL` when the password contains `%` or other special characters.
@@ -249,7 +249,7 @@ User answers override evidence. Answers persist in `questions`; `completionScore
 
 **Questions ↔ Evidence sync** (`shared/record_sync.py`):
 
-- After each answer (and on Evidence GET), satisfied question answers are promoted to **verified** attributes with a `user-answer` evidence quote.
+- After each answer (and on attribute extraction), satisfied question answers are promoted to **verified** attributes with a `user-answer` evidence quote.
 - Stale attribute rows from old scans are pruned so Evidence shows only fields relevant to the job.
 - Re-scan preserves user-confirmed answers from the Questions tab.
 
@@ -257,7 +257,7 @@ User answers override evidence. Answers persist in `questions`; `completionScore
 
 | Provider | Get key | Env |
 | --- | --- | --- |
-| **Google Gemini** (recommended) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | `LLM_PROVIDER=gemini`, `LLM_API_KEY=...`, `LLM_MODEL=gemini-2.0-flash` |
+| **Google Gemini** (recommended) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | `LLM_PROVIDER=gemini`, `LLM_API_KEY=...`, `LLM_MODEL=gemini-3.1-flash-lite` (free; avoid deprecated `gemini-2.0-flash`) |
 | **Groq** (alternative) | [console.groq.com](https://console.groq.com/) | `LLM_PROVIDER=groq`, `LLM_API_KEY=...`, `LLM_MODEL=llama-3.1-8b-instant` |
 | **Off** (rules only) | — | `LLM_PROVIDER=off` |
 
@@ -550,6 +550,7 @@ which is the only practical way to debug a bad nameplate read.
 | `OCR_PROVIDER` | Needs | Behaviour |
 | --- | --- | --- |
 | `off` (**default**) | nothing | Images are stored and listed, and read **no facts**. |
+| `ocrspace` | `OCR_API_KEY` from [ocr.space](https://ocr.space/ocrapi) | Cloud OCR (recommended — no local binary) |
 | `tesseract` | tesseract binary + `pip install pytesseract pillow` | Local OCR |
 | `custom` | `OCR_API_URL` (+ optional `OCR_API_KEY`) | POSTs the image; expects `{"text"}` or `{"pages"}` |
 

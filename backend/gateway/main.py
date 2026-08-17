@@ -12,8 +12,9 @@ Every public route is now a proxy — there are no stub routers left.
 relationship-service (:8006) and vision-service (:8007) stay internal.
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from gateway.config import settings
 from gateway.proxy import router as proxy_router
@@ -35,6 +36,14 @@ app.add_middleware(
 )
 
 app.include_router(proxy_router)
+
+
+@app.exception_handler(Exception)
+async def gateway_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal gateway error"},
+    )
 
 
 @app.get("/health", tags=["meta"])

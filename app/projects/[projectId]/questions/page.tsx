@@ -27,6 +27,9 @@ export default function QuestionsPage({
     try {
       await api.answerQuestion(projectId, openQuestion.id, answer);
       refresh();
+    } catch {
+      // Answer may have persisted despite a gateway timeout; sync UI from server.
+      refresh();
     } finally {
       setSubmitting(false);
     }
@@ -35,6 +38,7 @@ export default function QuestionsPage({
   return (
     <div className="grid grid-cols-3 gap-4">
       <div className="col-span-2">
+        <p className="label-caps mb-2">Current question</p>
         {loading && (
           <p className="font-mono text-[11px] text-faint">Loading questions…</p>
         )}
@@ -52,7 +56,7 @@ export default function QuestionsPage({
             <EmptyState
               icon={CheckCircle2}
               title="Nothing left to ask"
-              description="The record has answers for the blocking fields. If something is still held, it is on Review, not here."
+              description="Every required field is asked one at a time. Your last answer determines what comes next."
             />
           </Card>
         )}

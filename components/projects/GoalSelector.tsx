@@ -6,13 +6,13 @@ import { PROJECT_GOAL_LABELS } from "@/lib/types";
 
 const descriptions: Record<ProjectGoal, string> = {
   product_configuration:
-    "One SKU, fully specified, with parts that actually fit together.",
-  bom_generation: "A parts list for the application as described.",
-  technical_quotation: "A quote an engineer can stand behind.",
-  product_datasheet: "A datasheet that only prints cited fields.",
-  installation_package: "Mounting, wiring, commissioning — from the record.",
-  replacement_recommendation: "A substitute for a part that no longer ships.",
-  rfq_response: "Map the customer’s list onto the catalog, field by field.",
+    "A complete spec — every detail sourced, nothing invented.",
+  bom_generation: "A structured list of everything that belongs together.",
+  technical_quotation: "A quote where every line cites a source.",
+  product_datasheet: "A one-page summary with only verified facts.",
+  installation_package: "Setup and deployment steps from what you know.",
+  replacement_recommendation: "A plan to upgrade or replace what exists today.",
+  rfq_response: "A response mapped to what was asked for.",
 };
 
 const goals: ProjectGoal[] = [

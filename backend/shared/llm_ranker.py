@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -23,9 +24,51 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
-LLM_TIMEOUT = 12.0
+LLM_TIMEOUT = 3.0
+
+# A rejected key or an unreachable host would otherwise cost every request the
+# full timeout. Fail a couple of times, then stop calling for a while and serve
+# rule-based questions instead.
+FAILURES_BEFORE_MUTE = 2
+MUTE_SECONDS = 300.0
+
+_consecutive_failures = 0
+_muted_until = 0.0
+
+
+def reset_llm_health() -> None:
+    """Clear the failure counter (used by tests and after a config change)."""
+    global _consecutive_failures, _muted_until
+    _consecutive_failures = 0
+    _muted_until = 0.0
+
+
+def _muted() -> bool:
+    return time.monotonic() < _muted_until
+
+
+def _note_success() -> None:
+    reset_llm_health()
+
+
+def _mute(reason: str) -> None:
+    global _consecutive_failures, _muted_until
+    _consecutive_failures = FAILURES_BEFORE_MUTE
+    _muted_until = time.monotonic() + MUTE_SECONDS
+    logger.warning(
+        "LLM disabled for %.0fs (%s); using rule-based questions",
+        MUTE_SECONDS,
+        reason,
+    )
+
+
+def _note_failure() -> None:
+    global _consecutive_failures, _muted_until
+    _consecutive_failures += 1
+    if _consecutive_failures >= FAILURES_BEFORE_MUTE:
+        _mute(f"{_consecutive_failures} consecutive failures")
 
 
 @dataclass(frozen=True)
@@ -196,6 +239,86 @@ def _call_groq(settings: LlmSettings, prompt: str) -> str | None:
     return choices[0].get("message", {}).get("content")
 
 
+def complete_json(
+    settings: LlmSettings,
+    prompt: str,
+    *,
+    timeout: float = 30.0,
+    max_tokens: int = 1024,
+    temperature: float = 0.2,
+) -> str | None:
+    """Call the configured LLM and return raw JSON text (no mute gate).
+
+    Used for heavier one-shot tasks such as output solution generation at
+    print time. Question planning keeps its own shorter timeout + mute logic.
+    """
+    if not settings.enabled:
+        return None
+
+    try:
+        if settings.provider == "gemini":
+            model = settings.model or DEFAULT_GEMINI_MODEL
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model}:generateContent"
+            )
+            response = httpx.post(
+                url,
+                params={"key": settings.api_key},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "responseMimeType": "application/json",
+                        "temperature": temperature,
+                        "maxOutputTokens": max_tokens,
+                    },
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            body = response.json()
+            candidates = body.get("candidates") or []
+            if not candidates:
+                return None
+            parts = candidates[0].get("content", {}).get("parts") or []
+            if not parts:
+                return None
+            return parts[0].get("text")
+        if settings.provider == "groq":
+            model = settings.model or DEFAULT_GROQ_MODEL
+            response = httpx.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "Respond with valid JSON only.",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            body = response.json()
+            choices = body.get("choices") or []
+            if not choices:
+                return None
+            return choices[0].get("message", {}).get("content")
+    except Exception as exc:
+        logger.warning("LLM completion failed (%s)", exc)
+        return None
+    return None
+
+
 def plan_next_question(
     settings: LlmSettings,
     *,
@@ -204,7 +327,7 @@ def plan_next_question(
     conflicting: tuple[str, ...],
 ) -> QuestionPlan | None:
     """Return field + optional contextual wording, or None for rule fallback."""
-    if not settings.enabled or not missing:
+    if not settings.enabled or not missing or _muted():
         return None
 
     allowed = {spec.field for spec in missing}
@@ -216,15 +339,27 @@ def plan_next_question(
             raw = _call_groq(settings, prompt)
         else:
             return None
-        if not raw:
-            return None
-        plan = _parse_plan(raw, allowed)
-        if plan is not None:
-            return plan
-        logger.warning("LLM returned unparseable plan; using rule fallback")
-    except Exception as exc:
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code if exc.response is not None else 0
+        if 400 <= code < 500:
+            _mute(f"HTTP {code} — check LLM_API_KEY")
+        else:
+            _note_failure()
         logger.warning("LLM planner failed (%s); using rule fallback", exc)
-    return None
+        return None
+    except Exception as exc:
+        _note_failure()
+        logger.warning("LLM planner failed (%s); using rule fallback", exc)
+        return None
+
+    # The call worked, so the key and network are fine even if the JSON is not.
+    _note_success()
+    if not raw:
+        return None
+    plan = _parse_plan(raw, allowed)
+    if plan is None:
+        logger.warning("LLM returned unparseable plan; using rule fallback")
+    return plan
 
 
 # Backward-compatible alias used in tests

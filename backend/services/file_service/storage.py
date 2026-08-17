@@ -10,6 +10,14 @@ from botocore.exceptions import ClientError
 from services.file_service.config import settings
 
 
+class ObjectNotFoundError(Exception):
+    """Raised when an object key is missing from object storage."""
+
+    def __init__(self, storage_key: str) -> None:
+        self.storage_key = storage_key
+        super().__init__(storage_key)
+
+
 def _endpoint_url() -> str:
     """Build an S3 endpoint URL for MinIO or Supabase Storage.
 
@@ -71,10 +79,16 @@ def put_object(storage_key: str, data: bytes, content_type: str) -> None:
 
 
 def get_object(storage_key: str) -> bytes:
-    response = get_s3_client().get_object(
-        Bucket=settings.object_storage_bucket,
-        Key=storage_key,
-    )
+    try:
+        response = get_s3_client().get_object(
+            Bucket=settings.object_storage_bucket,
+            Key=storage_key,
+        )
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code in {"NoSuchKey", "404", "NotFound"}:
+            raise ObjectNotFoundError(storage_key) from exc
+        raise
     return response["Body"].read()
 
 

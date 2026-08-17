@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Nameplate / image OCR (M7). Default OFF so the stack runs with no system
     # binaries installed — images are simply stored and read no facts, rather
     # than the scan failing. See shared/ocr.py.
-    ocr_provider: str = "off"  # off | tesseract | custom
+    ocr_provider: str = "off"  # off | tesseract | ocrspace | custom
     ocr_api_url: str | None = None
     ocr_api_key: str | None = None
     tesseract_cmd: str | None = None

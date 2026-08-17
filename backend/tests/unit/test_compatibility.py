@@ -115,9 +115,19 @@ def test_evaluate_all_skips_rules_with_no_data_on_either_side():
         {"maximum_pressure": Side("285", "PSI")},
     )
     rules = {f.rule for f in findings}
-    # chemical_compatibility always reports (as an abstention); the rest only
-    # appear when the job has something to say about them.
-    assert rules == {"pressure_rating", "chemical_compatibility"}
+    # No operating_medium on this job → chemical_compatibility stays off.
+    assert rules == {"pressure_rating"}
+
+
+def test_evaluate_all_skips_chemical_rule_without_a_medium():
+    findings = evaluate_all({}, {})
+    assert findings == []
+
+
+def test_evaluate_all_runs_chemical_rule_when_medium_is_present():
+    findings = evaluate_all({"operating_medium": Side("Steam")}, {})
+    assert {f.rule for f in findings} == {"chemical_compatibility"}
+    assert findings[0].status == UNKNOWN
 
 
 def test_evaluate_all_carries_evidence_from_both_sides():

@@ -1,10 +1,10 @@
-"""Hybrid question engine — evidence + rules + optional LLM ranking.
+"""Rule-based question engine — evidence, conditional rules, built-in copy.
 
-Layers (see context.md):
+Layers:
   1. Goal/category field registry (+ conditional rules)
   2. Evidence pre-fill from M4 attributes (skip known fields)
   3. User answers from questions table (authoritative)
-  4. LLM picks which gap to ask first (optional; falls back to priority sort)
+  4. Built-in field order + scenario copy (never LLM for question text)
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 from shared.completeness import RequiredField, is_satisfied, next_unsatisfied, score_answers
 from shared.db.models import AttributeRow, DocumentRow, ProjectRow, QuestionRow
 from shared.field_registry import active_required_fields
-from shared.llm_ranker import LlmSettings, QuestionPlan, plan_next_question
 from shared.scenario_copy import ScenarioContext, enrich_question
 
 
@@ -94,9 +93,13 @@ def user_answers_map(rows: list[QuestionRow]) -> dict[str, str]:
 
 
 def build_job_context(
-    db: Session, project: ProjectRow, question_rows: list[QuestionRow]
+    db: Session,
+    project: ProjectRow,
+    question_rows: list[QuestionRow],
+    attributes: list[AttributeRow] | None = None,
 ) -> JobContext:
-    attributes = list_attribute_rows(db, project.id)
+    if attributes is None:
+        attributes = list_attribute_rows(db, project.id)
     documents = list(
         db.scalars(
             select(DocumentRow)
@@ -131,40 +134,10 @@ class NextQuestion:
     why_asked: str
 
 
-def pick_next_question(
-    ctx: JobContext,
-    llm: LlmSettings | None = None,
-) -> NextQuestion | None:
+def pick_next_question(ctx: JobContext) -> NextQuestion | None:
+    """Pick the next built-in question from registry order and prior answers."""
     specs = active_specs(ctx)
-    merged = ctx.merged_answers
-    missing = [spec for spec in specs if not is_satisfied(merged.get(spec.field))]
-    if not missing:
-        return None
-
-    by_field = {spec.field: spec for spec in missing}
-    plan: QuestionPlan | None = None
-    if llm is not None and llm.enabled:
-        plan = plan_next_question(
-            llm,
-            context=ctx,
-            missing=missing,
-            conflicting=ctx.conflicting_fields,
-        )
-
-    if plan is not None and plan.field in by_field:
-        spec = by_field[plan.field]
-        scenario = ScenarioContext(
-            name=ctx.name,
-            goal=ctx.goal,
-            category=ctx.category,
-            document_names=ctx.document_names,
-        )
-        if plan.text and plan.why_asked:
-            return NextQuestion(spec=spec, text=plan.text, why_asked=plan.why_asked)
-        enriched = enrich_question(spec, scenario)
-        return NextQuestion(spec=enriched.spec, text=enriched.text, why_asked=enriched.why_asked)
-
-    spec = next_unsatisfied(specs, merged, goal=ctx.goal)
+    spec = next_unsatisfied(specs, ctx.merged_answers, goal=ctx.goal)
     if spec is None:
         return None
     scenario = ScenarioContext(

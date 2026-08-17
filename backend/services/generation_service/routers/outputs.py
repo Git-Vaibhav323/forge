@@ -10,6 +10,7 @@ from services.generation_service.repository import (
     generate_output,
     list_outputs,
     read_output_bytes,
+    read_output_preview,
 )
 from shared.db.models import ProjectRow
 from shared.db.session import get_session_factory
@@ -48,6 +49,22 @@ def post_output(
     project = _project(db, project_id)
     output_type = (payload.type or "").strip() or project.goal
     return generate_output(db, project, output_type)
+
+
+@router.get("/outputs/{output_id}/preview")
+def preview_output(output_id: str, db: Session = Depends(get_db)) -> dict[str, str]:
+    try:
+        row, content = read_output_preview(db, output_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Output not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+    return {
+        "filename": row.filename,
+        "contentType": row.content_type,
+        "content": content,
+    }
 
 
 @router.get("/outputs/{output_id}/download")

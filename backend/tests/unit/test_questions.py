@@ -28,7 +28,7 @@ def test_rfq_goal_skips_common_catalog_fields() -> None:
 
 
 def test_sensor_category_adds_range() -> None:
-    fields = {spec.field for spec in required_fields("rfq_response", "temperature_sensor")}
+    fields = {spec.field for spec in required_fields("rfq_response", "Industrial equipment sensor")}
     assert "measurement_range" in fields
     assert "customer_requirement" in fields
 
@@ -40,6 +40,17 @@ def test_i_dont_know_is_not_satisfied() -> None:
     assert is_satisfied("idk") is False
     assert is_satisfied("") is False
     assert is_satisfied(None) is False
+
+
+def test_pump_category_adds_flow_and_head() -> None:
+    fields = {spec.field for spec in required_fields("bom_generation", "Industrial equipment pump")}
+    assert "design_flow_rate" in fields
+    assert "design_head" in fields
+
+
+def test_software_category_adds_platform() -> None:
+    fields = {spec.field for spec in required_fields("product_configuration", "Software or app")}
+    assert "platform" in fields
 
 
 def test_score_and_next_question_order() -> None:

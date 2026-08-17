@@ -109,13 +109,13 @@ export type ProjectGoal =
   | "rfq_response";
 
 export const PROJECT_GOAL_LABELS: Record<ProjectGoal, string> = {
-  product_configuration: "Product configuration",
-  bom_generation: "Bill of materials",
-  technical_quotation: "Technical quotation",
-  product_datasheet: "Product datasheet",
-  installation_package: "Installation package",
-  replacement_recommendation: "Replacement recommendation",
-  rfq_response: "RFQ response",
+  product_configuration: "Full specification",
+  bom_generation: "Parts list",
+  technical_quotation: "Quote",
+  product_datasheet: "Summary sheet",
+  installation_package: "Setup guide",
+  replacement_recommendation: "Upgrade plan",
+  rfq_response: "Request response",
 };
 
 export type ProjectStatus =

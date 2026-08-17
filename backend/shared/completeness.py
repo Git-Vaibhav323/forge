@@ -39,37 +39,38 @@ def _select(field: str, text: str, why: str, priority: str, *options: str) -> Re
 COMMON: tuple[RequiredField, ...] = (
     RequiredField(
         field="manufacturer",
-        text="Who manufactured this product?",
-        why_asked="Identifies the catalog family before any rating can be trusted.",
+        text="Who provides or owns this?",
+        why_asked="Identifies the source before anything can be verified.",
         priority="high",
     ),
     RequiredField(
         field="model",
-        text="What is the model or SKU?",
-        why_asked="Without a model, sibling parts and datasheets cannot be matched.",
+        text="What is the name, version, or identifier?",
+        why_asked="A stable identifier is needed to match documents and outputs.",
         priority="critical",
     ),
     _select(
         "operating_medium",
-        "What medium will this see in service?",
-        "Drives seals, body material, and chemical-compatibility checks.",
+        "What does this interact with or depend on?",
+        "Context drives compatibility checks and what gets asked next.",
         "critical",
-        "Water",
-        "Compressed air",
-        "Oil",
-        "Steam",
-        "Chemical",
+        "People / users",
+        "Data or content",
+        "Physical environment",
+        "Another system",
         "Other",
     ),
     _select(
         "installation_environment",
-        "Where will it be installed?",
-        "Sets enclosure (IP) and coating requirements.",
+        "Where is this used or deployed?",
+        "Environment shapes requirements and constraints.",
         "high",
-        "Indoor",
-        "Outdoor",
-        "Both",
-        "Hazardous area",
+        "Office / remote",
+        "Customer site",
+        "Cloud",
+        "Field / on-site",
+        "Regulated / restricted",
+        "Other",
     ),
 )
 
@@ -77,61 +78,58 @@ GOAL_FIELDS: dict[str, tuple[RequiredField, ...]] = {
     "product_configuration": (
         _select(
             "fail_safe_mode",
-            "Should it close on power loss, or stay open?",
-            "Selects the actuator variant before a configuration can be issued.",
+            "What should happen if power or service is interrupted?",
+            "Defines the safe default before a configuration can be issued.",
             "critical",
-            "Close on power loss (normally closed)",
-            "Stay open (normally open)",
+            "Return to safe / off state",
+            "Keep last state",
+            "Not applicable",
         ),
         RequiredField(
             field="supply_voltage",
-            text="What coil / supply voltage is required?",
-            why_asked="Voltage is high-risk — a wrong coil is a safety and fit issue.",
+            text="What power or input level is required?",
+            why_asked="Wrong power or input breaks fit and safety assumptions.",
             priority="critical",
         ),
         _select(
             "connection_standard",
-            "What connection standard should the ports use?",
-            "NPT vs BSPP is a common datasheet mix-up and a leak waiting to happen.",
+            "What interface or connection standard applies?",
+            "Mismatched interfaces are a common source of rework.",
             "high",
-            "NPT",
-            "BSPP",
-            "BSPT",
-            "SAE",
-            "Flanged",
+            "Standard A",
+            "Standard B",
+            "Custom",
             "Unknown",
         ),
         RequiredField(
             field="maximum_pressure",
-            text="What maximum working pressure must it hold?",
-            why_asked="Pressure rating is safety-critical and cannot be guessed.",
+            text="What is the key limit or rating it must meet?",
+            why_asked="The governing limit cannot be guessed from a name alone.",
             priority="critical",
         ),
     ),
     "bom_generation": (
         RequiredField(
             field="application",
-            text="What application is this BOM for?",
-            why_asked="The parts list follows the application, not a generic catalog dump.",
+            text="What is this list for?",
+            why_asked="The list follows the use case — not a generic dump.",
             priority="critical",
         ),
         RequiredField(
             field="quantity",
-            text="How many complete assemblies are needed?",
-            why_asked="Quantities scale every BOM line.",
+            text="How many are needed?",
+            why_asked="Quantities scale every line item.",
             priority="high",
             input_type="number",
         ),
         _select(
             "connection_standard",
-            "What connection standard should mating parts use?",
-            "Mismatched threads make the whole BOM unusable in the field.",
+            "What interface or format should line items follow?",
+            "Keeps the list consistent end to end.",
             "high",
-            "NPT",
-            "BSPP",
-            "BSPT",
-            "SAE",
-            "Flanged",
+            "Standard A",
+            "Standard B",
+            "Custom",
             "Unknown",
         ),
     ),
@@ -153,40 +151,40 @@ GOAL_FIELDS: dict[str, tuple[RequiredField, ...]] = {
     "product_datasheet": (
         RequiredField(
             field="key_rating",
-            text="What is the headline rating that must appear on the sheet?",
-            why_asked="A datasheet that omits the governing rating is not publishable.",
+            text="What is the headline fact or spec that must appear?",
+            why_asked="A summary without its main point is not publishable.",
             priority="critical",
         ),
     ),
     "installation_package": (
         _select(
             "mounting_orientation",
-            "What mounting orientation is required?",
-            "Coil and drain orientation are installation-fatal if wrong.",
+            "How should this be set up or deployed?",
+            "Setup steps depend on orientation and access.",
             "high",
-            "Vertical coil-up",
-            "Vertical coil-down",
-            "Horizontal",
+            "Standard setup",
+            "Custom setup",
+            "Remote / hands-off",
             "Any",
         ),
         RequiredField(
             field="power_supply",
-            text="What power supply is available at the install site?",
-            why_asked="Wiring instructions cannot be written without the supply.",
+            text="What power, access, or prerequisites are available on site?",
+            why_asked="Setup instructions need the real environment.",
             priority="critical",
         ),
     ),
     "replacement_recommendation": (
         RequiredField(
             field="existing_part_number",
-            text="What part is being replaced?",
-            why_asked="A substitute is defined against the installed part, not a guess.",
+            text="What exists today that needs to change?",
+            why_asked="Upgrades are defined against what is installed now — not a guess.",
             priority="critical",
         ),
         RequiredField(
             field="reason_for_replacement",
-            text="Why is it being replaced?",
-            why_asked="Obsolete vs failed vs upsized changes which substitutes are legal.",
+            text="Why does it need to change?",
+            why_asked="Broken, obsolete, and upsized changes follow different paths.",
             priority="high",
         ),
     ),
@@ -221,6 +219,64 @@ GOAL_ONLY: frozenset[str] = frozenset(
 
 CATEGORY_FIELDS: tuple[tuple[str, RequiredField], ...] = (
     (
+        "physical product",
+        RequiredField(
+            field="key_specification",
+            text="What is the most important specification?",
+            why_asked="Every product has one fact that everything else hangs on.",
+            priority="critical",
+        ),
+    ),
+    (
+        "software",
+        RequiredField(
+            field="platform",
+            text="What platform or environment does this run on?",
+            why_asked="Stack and deployment shape every downstream question.",
+            priority="critical",
+        ),
+    ),
+    (
+        "service",
+        RequiredField(
+            field="scope",
+            text="What is in scope for this service or process?",
+            why_asked="Boundaries keep the record honest about what is covered.",
+            priority="critical",
+        ),
+    ),
+    (
+        "content",
+        RequiredField(
+            field="audience",
+            text="Who is the intended audience?",
+            why_asked="Tone, depth, and format all follow the reader.",
+            priority="high",
+        ),
+    ),
+    (
+        "kit",
+        RequiredField(
+            field="bundle_contents",
+            text="What items belong in this kit or bundle?",
+            why_asked="A bundle is only complete when every piece is named.",
+            priority="critical",
+        ),
+    ),
+    (
+        "industrial",
+        _select(
+            "fail_safe_mode",
+            "What should happen on power or signal loss?",
+            "Fail position is safety-critical on plant equipment.",
+            "critical",
+            "Fail safe / off",
+            "Fail open",
+            "Hold last position",
+            "Not applicable",
+        ),
+    ),
+    (
         "valve",
         _select(
             "fail_safe_mode",
@@ -232,15 +288,175 @@ CATEGORY_FIELDS: tuple[tuple[str, RequiredField], ...] = (
         ),
     ),
     (
+        "pump",
+        RequiredField(
+            field="design_flow_rate",
+            text="What design flow rate must the pump deliver?",
+            why_asked="BOM and curve selection start from the duty point.",
+            priority="critical",
+        ),
+    ),
+    (
+        "pump",
+        RequiredField(
+            field="design_head",
+            text="What total dynamic head (TDH) is required?",
+            why_asked="Head and flow together define the pump operating point.",
+            priority="critical",
+        ),
+    ),
+    (
         "sensor",
         RequiredField(
             field="measurement_range",
-            text="What measurement range must the sensor cover?",
+            text="What measurement range must the instrument cover?",
             why_asked="A sensor outside the process range is a wrong part.",
             priority="critical",
         ),
     ),
+    (
+        "transmitter",
+        RequiredField(
+            field="measurement_range",
+            text="What measurement range must the transmitter cover?",
+            why_asked="Range and accuracy class must match the process.",
+            priority="critical",
+        ),
+    ),
+    (
+        "meter",
+        RequiredField(
+            field="flow_range",
+            text="What flow range must the meter cover?",
+            why_asked="Sizing errors show up as poor accuracy or straight-run violations.",
+            priority="critical",
+        ),
+    ),
+    (
+        "motor",
+        RequiredField(
+            field="motor_power",
+            text="What motor power (HP or kW) is required?",
+            why_asked="Drive sizing depends on nameplate power and service factor.",
+            priority="critical",
+        ),
+    ),
+    (
+        "actuator",
+        _select(
+            "fail_safe_mode",
+            "Should the actuator fail closed, fail open, or hold last position?",
+            "Fail position is safety-critical and must be confirmed.",
+            "critical",
+            "Fail closed",
+            "Fail open",
+            "Hold last position",
+        ),
+    ),
+    (
+        "compressor",
+        RequiredField(
+            field="air_demand_cfm",
+            text="What compressed-air demand (CFM) is required?",
+            why_asked="Compressor sizing starts from peak demand and duty cycle.",
+            priority="critical",
+        ),
+    ),
+    (
+        "exchanger",
+        RequiredField(
+            field="heat_duty",
+            text="What heat duty (BTU/hr or kW) must the exchanger transfer?",
+            why_asked="Thermal sizing cannot be inferred from a model name alone.",
+            priority="critical",
+        ),
+    ),
+    (
+        "filter",
+        RequiredField(
+            field="filtration_rating",
+            text="What filtration rating (micron) is required?",
+            why_asked="Mesh or element rating defines what passes downstream.",
+            priority="high",
+        ),
+    ),
+    (
+        "strainer",
+        RequiredField(
+            field="filtration_rating",
+            text="What strainer mesh size is required?",
+            why_asked="Protects downstream equipment from debris.",
+            priority="high",
+        ),
+    ),
+    (
+        "panel",
+        RequiredField(
+            field="supply_voltage",
+            text="What supply voltage feeds this panel?",
+            why_asked="Power distribution and breaker sizing depend on it.",
+            priority="critical",
+        ),
+    ),
+    (
+        "plc",
+        RequiredField(
+            field="io_count",
+            text="How many I/O points are required?",
+            why_asked="PLC and rack sizing follow from I/O count.",
+            priority="high",
+            input_type="number",
+        ),
+    ),
+    (
+        "customer",
+        RequiredField(
+            field="request_summary",
+            text="What is the customer asking for, in one sentence?",
+            why_asked="Every request needs a clear ask before work can be scoped.",
+            priority="critical",
+        ),
+    ),
+    (
+        "upgrade",
+        RequiredField(
+            field="existing_part_number",
+            text="What exists today that will be changed?",
+            why_asked="Upgrades are defined against what is installed now — not a guess.",
+            priority="critical",
+        ),
+    ),
+    (
+        "document",
+        RequiredField(
+            field="deliverable_format",
+            text="What format or channel is this content for?",
+            why_asked="Structure and tone follow how the audience will consume it.",
+            priority="critical",
+        ),
+    ),
 )
+
+
+def all_critical_field_names() -> frozenset[str]:
+    """Every field marked critical anywhere in the built-in schema."""
+    names: set[str] = set()
+    for spec in COMMON:
+        if spec.priority == "critical":
+            names.add(spec.field)
+    for specs in GOAL_FIELDS.values():
+        for spec in specs:
+            if spec.priority == "critical":
+                names.add(spec.field)
+    for _, spec in CATEGORY_FIELDS:
+        if spec.priority == "critical":
+            names.add(spec.field)
+    from shared.field_registry import EXTRA_FIELDS
+
+    for spec in EXTRA_FIELDS.values():
+        if spec.priority == "critical":
+            names.add(spec.field)
+    return frozenset(names)
 
 
 def required_fields(goal: str, category: str = "") -> list[RequiredField]:
@@ -296,11 +512,13 @@ def next_unsatisfied(
     goal: str = "",
 ) -> RequiredField | None:
     missing = [spec for spec in specs if not is_satisfied(answers.get(spec.field))]
+    field_order = {spec.field: index for index, spec in enumerate(specs)}
     goal_first = goal_field_names(goal)
     missing.sort(
         key=lambda spec: (
             0 if spec.field in goal_first else 1,
             PRIORITY_ORDER.get(spec.priority, 9),
+            field_order.get(spec.field, 999),
         )
     )
     return missing[0] if missing else None

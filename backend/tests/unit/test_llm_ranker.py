@@ -6,7 +6,7 @@ from unittest.mock import patch
 import httpx
 
 from shared.completeness import RequiredField
-from shared.llm_ranker import LlmSettings, rank_next_field
+from shared.llm_ranker import FAILURES_BEFORE_MUTE, LlmSettings, rank_next_field
 from shared.question_engine import JobContext
 
 
@@ -126,3 +126,50 @@ def test_llm_http_error_falls_back() -> None:
             conflicting=(),
         )
     assert field is None
+
+
+def test_repeated_failures_stop_further_calls() -> None:
+    """A rejected key must cost a couple of slow requests, not every request."""
+    from shared.llm_ranker import reset_llm_health
+
+    reset_llm_health()
+    calls = 0
+
+    def fake_post(url, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise httpx.TimeoutException("timeout")
+
+    settings = LlmSettings(provider="gemini", api_key="bad-key")
+    with patch("shared.llm_ranker.httpx.post", side_effect=fake_post):
+        for _ in range(5):
+            assert rank_next_field(
+                settings, context=_ctx(), missing=_missing(), conflicting=()
+            ) is None
+
+    assert calls == FAILURES_BEFORE_MUTE
+    reset_llm_health()
+
+
+def test_client_error_mutes_immediately() -> None:
+    """A 400/API_KEY_INVALID must not stall every subsequent question."""
+    from shared.llm_ranker import reset_llm_health
+
+    reset_llm_health()
+    calls = 0
+
+    def fake_post(url, **kwargs):
+        nonlocal calls
+        calls += 1
+        request = httpx.Request("POST", str(url))
+        return httpx.Response(400, json={"error": {"message": "API key not valid"}}, request=request)
+
+    settings = LlmSettings(provider="gemini", api_key="bad-key")
+    with patch("shared.llm_ranker.httpx.post", side_effect=fake_post):
+        for _ in range(4):
+            assert rank_next_field(
+                settings, context=_ctx(), missing=_missing(), conflicting=()
+            ) is None
+
+    assert calls == 1
+    reset_llm_health()

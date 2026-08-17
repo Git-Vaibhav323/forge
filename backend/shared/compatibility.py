@@ -221,12 +221,16 @@ def evaluate(rule: Rule, required: Side | None, rated: Side | None) -> Finding:
 def evaluate_all(
     requirements: dict[str, Side], ratings: dict[str, Side]
 ) -> list[Finding]:
-    """Run every rule whose field is present on either side."""
+    """Run every rule whose field is present on either side.
+
+    Abstain-only rules (chemical compatibility) still need an operating medium
+    on the job — they must not fire on techstack / software replacements.
+    """
     findings: list[Finding] = []
     for rule in RULES:
         required = requirements.get(rule.field)
         rated = ratings.get(rule.field)
-        if rule.comparison != ABSTAIN and required is None and rated is None:
+        if required is None and rated is None:
             continue
         findings.append(evaluate(rule, required, rated))
     return findings
