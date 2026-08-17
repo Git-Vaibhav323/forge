@@ -240,6 +240,44 @@ class BomLineRow(Base):
     )
 
 
+class CatalogLineRow(Base):
+    """One evaluated row from an uploaded catalog CSV."""
+
+    __tablename__ = "catalog_lines"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "document_id", "row_index", name="uq_catalog_project_doc_row"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    row_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mfg_part_num: Mapped[str] = mapped_column(String(128), nullable=False)
+    part_desc: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    e1_brand: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    unilog_brand: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    dib_brand: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    part_manuf: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    e1_brand_norm: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    unilog_brand_norm: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    dib_brand_norm: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    part_manuf_norm: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    evaluation_status: Mapped[str] = mapped_column(String(32), nullable=False, default="brand_gap")
+    recommended_brand: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    brand_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    findings_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class OutputRow(Base):
     """A generated artifact. One per (job, type) — regenerating replaces it.
 

@@ -13,6 +13,8 @@ from services.evidence_service.extraction import (
     merge_hits,
     parse_page,
 )
+from shared.catalog_sync import sync_catalog_evaluation
+from shared.catalog_parser import CatalogPart, parse_catalog_csv
 from shared.evidence_fields import extraction_targets
 from shared.question_engine import build_job_context, list_question_rows as list_q_rows
 from shared.record_sync import apply_user_answers_to_attributes
@@ -154,6 +156,28 @@ def _collect_hits(db: Session, project_id: str) -> list[Hit]:
     return hits
 
 
+def _collect_catalog_batches(
+    db: Session, project_id: str
+) -> list[tuple[DocumentRow, list[CatalogPart]]]:
+    documents = list(
+        db.scalars(
+            select(DocumentRow)
+            .where(DocumentRow.project_id == project_id, DocumentRow.type == "catalog")
+            .order_by(DocumentRow.uploaded_at.asc())
+        )
+    )
+    batches: list[tuple[DocumentRow, list]] = []
+    for doc in documents:
+        try:
+            data = _read_pdf_bytes(doc.storage_key)
+            parts = parse_catalog_csv(data, filename=doc.filename)
+        except Exception:
+            doc.status = "failed"
+            continue
+        batches.append((doc, parts))
+    return batches
+
+
 def _persist(db: Session, project: ProjectRow, drafts: list[AttributeDraft]) -> None:
     existing = list(
         db.scalars(select(AttributeRow).where(AttributeRow.project_id == project.id))
@@ -215,11 +239,19 @@ def _persist(db: Session, project: ProjectRow, drafts: list[AttributeDraft]) -> 
 
 def run_extraction(db: Session, project: ProjectRow) -> list[Attribute]:
     hits = _collect_hits(db, project.id)
+    catalog_batches = _collect_catalog_batches(db, project.id)
     q_rows = list_q_rows(db, project.id)
     ctx = build_job_context(db, project, q_rows)
-    targets = extraction_targets(ctx, hits)
-    drafts = merge_hits(hits, targets)
-    _persist(db, project, drafts)
+    if hits:
+        targets = extraction_targets(ctx, hits)
+        drafts = merge_hits(hits, targets)
+        _persist(db, project, drafts)
+    elif not catalog_batches:
+        _persist(db, project, [])
+
+    for doc, parts in catalog_batches:
+        sync_catalog_evaluation(db, project, doc, parts)
+
     apply_user_answers_to_attributes(db, project, q_rows)
     # Variants, compatibility findings and BOM lines all read the record we
     # just rebuilt, so they are re-derived here (M6). Must run BEFORE
