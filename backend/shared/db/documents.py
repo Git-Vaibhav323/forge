@@ -15,6 +15,7 @@ def row_to_document(row: DocumentRow) -> ProjectDocument:
         status=row.status,
         uploadedAt=row.uploaded_at,
         pages=row.pages,
+        sourceUrl=row.source_url,
     )
 
 

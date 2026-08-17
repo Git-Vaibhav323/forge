@@ -91,7 +91,9 @@ export default function ProjectOverviewPage({
                   className="flex items-center gap-3 px-4 py-2.5 text-[13px]"
                 >
                   <FileText size={14} className="shrink-0 text-faint" />
-                  <span className="min-w-0 flex-1 truncate">{doc.filename}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {doc.sourceUrl || doc.filename}
+                  </span>
                   <span className="font-mono text-[11px] uppercase text-faint">
                     {doc.type.replace(/_/g, " ")}
                   </span>

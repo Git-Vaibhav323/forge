@@ -28,6 +28,12 @@ async def proxy_project_files(project_id: str, request: Request) -> Response:
     return await _forward(request, settings.file_service_url, timeout=120.0)
 
 
+@router.api_route("/api/projects/{project_id}/sources", methods=["POST", "OPTIONS"])
+async def proxy_project_sources(project_id: str, request: Request) -> Response:
+    # Fetching a remote catalog page can be slow; allow the same budget as uploads.
+    return await _forward(request, settings.file_service_url, timeout=120.0)
+
+
 @router.api_route("/api/projects/{project_id}/questions", methods=["GET", "OPTIONS"])
 async def proxy_project_questions(project_id: str, request: Request) -> Response:
     return await _forward(request, settings.question_service_url)

@@ -140,6 +140,8 @@ export interface ProjectDocument {
   status: "pending" | "processing" | "processed" | "failed";
   uploadedAt: string;
   pages?: number;
+  /** Set when the document was ingested from a pasted/fetched URL. */
+  sourceUrl?: string;
 }
 
 export interface Project {

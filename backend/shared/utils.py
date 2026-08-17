@@ -12,6 +12,8 @@ def guess_doc_type(filename: str) -> str:
         return "image"
     if ext in {"csv", "xlsx", "xls"}:
         return "catalog"
+    if ext in {"html", "htm"}:
+        return "web"
     return "document"
 
 

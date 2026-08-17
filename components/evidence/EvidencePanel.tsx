@@ -1,8 +1,19 @@
-import { FileText, ImageIcon } from "lucide-react";
-import type { Attribute } from "@/lib/types";
+import { FileText, Globe, ImageIcon } from "lucide-react";
+import type { Attribute, Evidence } from "@/lib/types";
 import { FieldStatusBadge } from "@/components/shared/StatusBadge";
 import { ConfidenceMeter } from "@/components/shared/Meters";
 import { EmptyState } from "@/components/shared/EmptyState";
+
+function isWebEvidence(ev: Evidence): boolean {
+  const t = (ev.documentType || "").toLowerCase();
+  return t === "web" || t === "html" || t === "webpage";
+}
+
+function SourceIcon({ ev }: { ev: Evidence }) {
+  if (isWebEvidence(ev)) return <Globe size={12} />;
+  if (ev.documentType === "image") return <ImageIcon size={12} />;
+  return <FileText size={12} />;
+}
 
 export function EvidencePanel({ attribute }: { attribute: Attribute | undefined }) {
   if (!attribute) {
@@ -56,14 +67,26 @@ export function EvidencePanel({ attribute }: { attribute: Attribute | undefined 
             key={ev.id}
             className="rounded border-l-2 border-l-accent bg-paper px-3 py-2.5"
           >
-            <div className="mb-1 flex items-center gap-1.5 font-mono text-[11px] text-muted">
-              {ev.documentType === "image" ? (
-                <ImageIcon size={12} />
+            <div className="mb-1 flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-muted">
+              <SourceIcon ev={ev} />
+              {isWebEvidence(ev) ? (
+                <a
+                  href={ev.documentName}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="max-w-full truncate text-accent hover:underline"
+                  title={ev.documentName}
+                >
+                  {ev.documentName}
+                </a>
               ) : (
-                <FileText size={12} />
+                <span className="truncate">{ev.documentName}</span>
               )}
-              {ev.documentName}
-              {ev.page && <span>· p.{ev.page}</span>}
+              {isWebEvidence(ev) ? (
+                <span className="uppercase text-faint">· web</span>
+              ) : ev.page ? (
+                <span>· p.{ev.page}</span>
+              ) : null}
             </div>
             <p className="text-[13px] italic leading-snug text-ink">
               &ldquo;{ev.quote}&rdquo;

@@ -33,19 +33,40 @@ import { simulateLatency } from "./utils";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;
 const USE_MOCK = !API_BASE;
 
+// Lightweight request layer: dedupe concurrent identical GETs and serve a
+// very short-lived cache so switching tabs (Overview ↔ Questions ↔ Evidence)
+// feels instant instead of re-hitting a remote DB each time.
 const inflight = new Map<string, Promise<unknown>>();
+const cache = new Map<string, { value: unknown; ts: number }>();
+const DEFAULT_TTL = 4000;
 
-function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
+function cachedGet<T>(key: string, fn: () => Promise<T>, ttl = DEFAULT_TTL): Promise<T> {
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.ts < ttl) {
+    return Promise.resolve(hit.value as T);
+  }
   const existing = inflight.get(key);
   if (existing) return existing as Promise<T>;
-  const pending = fn().finally(() => inflight.delete(key));
+  const pending = fn()
+    .then((value) => {
+      cache.set(key, { value, ts: Date.now() });
+      return value;
+    })
+    .finally(() => inflight.delete(key));
   inflight.set(key, pending);
   return pending;
+}
+
+function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  return cachedGet(key, fn);
 }
 
 function invalidateApi(prefix: string) {
   for (const key of [...inflight.keys()]) {
     if (key.startsWith(prefix)) inflight.delete(key);
+  }
+  for (const key of [...cache.keys()]) {
+    if (key.startsWith(prefix)) cache.delete(key);
   }
 }
 
@@ -79,7 +100,7 @@ export async function listProjects(): Promise<Project[]> {
     await simulateLatency();
     return state.projects;
   }
-  return http<Project[]>("/api/projects");
+  return cachedGet("GET:/api/projects", () => http<Project[]>("/api/projects"));
 }
 
 export async function getProject(id: string): Promise<Project | undefined> {
@@ -120,10 +141,12 @@ export async function createProject(input: {
     state.outputs[project.id] = [];
     return project;
   }
-  return http<Project>("/api/projects", {
+  const created = await http<Project>("/api/projects", {
     method: "POST",
     body: JSON.stringify(input),
   });
+  invalidateApi("GET:/api/projects");
+  return created;
 }
 
 export async function deleteProject(id: string): Promise<void> {
@@ -136,6 +159,7 @@ export async function deleteProject(id: string): Promise<void> {
     delete state.outputs[id];
     return;
   }
+  invalidateApi("GET:/api/projects");
   const res = await fetch(`${API_BASE}/api/projects/${id}`, { method: "DELETE" });
   if (res.status === 404) {
     throw new Error("Job not found");
@@ -195,6 +219,8 @@ export async function uploadDocument(
     throw new DuplicateDocumentError(body.detail);
   }
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+  invalidateApi(`GET:/api/projects/${projectId}`);
+  invalidateApi("GET:/api/projects");
   return res.json();
 }
 
@@ -215,7 +241,66 @@ export async function listAttributes(projectId: string): Promise<Attribute[]> {
     await simulateLatency();
     return state.attributes[projectId] ?? [];
   }
-  return http<Attribute[]>(`/api/projects/${projectId}/attributes`);
+  return cachedGet(`GET:/api/projects/${projectId}/attributes`, () =>
+    http<Attribute[]>(`/api/projects/${projectId}/attributes`)
+  );
+}
+
+/** Re-read every PDF/web source on the job and rebuild cited attributes (M4). */
+export async function extractAttributes(projectId: string): Promise<Attribute[]> {
+  if (USE_MOCK) {
+    await simulateLatency(600);
+    return state.attributes[projectId] ?? [];
+  }
+  invalidateApi(`GET:/api/projects/${projectId}`);
+  return http<Attribute[]>(`/api/projects/${projectId}/attributes/extract`, {
+    method: "POST",
+  });
+}
+
+/** Add a web page as a citeable document (fetch URL or paste HTML). */
+export async function addWebSource(
+  projectId: string,
+  input: { url: string; html?: string },
+  intent?: UploadIntent
+): Promise<{
+  documentId: string;
+  status: string;
+  filename?: string;
+  type?: string;
+  sourceUrl?: string;
+}> {
+  if (USE_MOCK) {
+    await simulateLatency(500);
+    const project = state.projects.find((p) => p.id === projectId);
+    const documentId = `doc-${Math.floor(Math.random() * 9000 + 1000)}`;
+    project?.documents.push({
+      id: documentId,
+      filename: input.url,
+      type: "web",
+      status: "processing",
+      uploadedAt: new Date().toISOString(),
+      sourceUrl: input.url,
+    });
+    return { documentId, status: "processing", type: "web", sourceUrl: input.url };
+  }
+  const query = intent ? `?intent=${intent}` : "";
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/sources${query}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: input.url, html: input.html || undefined }),
+  });
+  if (res.status === 409) {
+    const body = (await res.json()) as { detail: DuplicateDocumentDetail };
+    throw new DuplicateDocumentError(body.detail);
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Could not add web source (${res.status}): ${text}`);
+  }
+  invalidateApi(`GET:/api/projects/${projectId}`);
+  invalidateApi("GET:/api/projects");
+  return res.json();
 }
 
 // ---------------------------------------------------------------------------

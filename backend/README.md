@@ -96,12 +96,13 @@ source .venv/bin/activate
 ./scripts/run-dev.sh
 ```
 
-Or four separate terminals:
+Or separate terminals:
 
 ```bash
 uvicorn services.project_service.main:app --reload --port 8001
 uvicorn services.file_service.main:app --reload --port 8002
 uvicorn services.question_service.main:app --reload --port 8003
+uvicorn services.evidence_service.main:app --reload --port 8004
 uvicorn gateway.main:app --reload --port 8000
 ```
 
@@ -112,6 +113,7 @@ curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8001/health
 curl http://127.0.0.1:8002/health
 curl http://127.0.0.1:8003/health
+curl http://127.0.0.1:8004/health
 curl http://127.0.0.1:8000/api/projects
 ```
 
@@ -225,7 +227,13 @@ Required fields come from the job **goal + category**. One open question at a ti
 | Method | Path | Status |
 | --- | --- | --- |
 | `GET` | `/api/projects/{id}/attributes` | ✅ (stored, cited) |
-| `POST` | `/api/projects/{id}/attributes/extract` | ✅ (re-scan PDFs) |
+| `POST` | `/api/projects/{id}/attributes/extract` | ✅ (re-scan PDFs + web) |
+
+**File-service** also exposes web ingest (proxied through gateway):
+
+| Method | Path | Status |
+| --- | --- | --- |
+| `POST` | `/api/projects/{id}/sources` | ✅ (URL fetch or pasted HTML) |
 
 **How it works (key-free, no API key, no pgvector):** the service downloads each
 PDF for the job from object storage, extracts text per page with `pypdf`, and
@@ -244,20 +252,64 @@ pgvector + embeddings **without touching the frontend or DB**.
 
 ### What you must configure
 
-1. **Migration:** `alembic upgrade head` (adds `attributes`, `attribute_evidence` — revision `004`).
-2. **One dependency:** `python -m pip install pypdf` (already pinned in `requirements.txt`; pure Python, no system libs).
-3. **`EVIDENCE_SERVICE_URL=http://localhost:8004`** in `backend/.env` (already added).
-4. Object storage + Postgres — **same as M1–M3**. No new keys.
+1. **Migrations:** `alembic upgrade head` (through revision `005` — `attributes`, `source_url`).
+2. **Dependency:** `python -m pip install pypdf` (pinned in `requirements.txt`).
+3. **`EVIDENCE_SERVICE_URL=http://localhost:8004`** in `backend/.env`.
+4. Object storage + Postgres — **same as M1–M3**. **No API keys** for PDF or direct web fetch.
 
-Not needed: pgvector, embeddings key, Redis, Celery, OCR. (All deferred to later, drop-in.)
+Not needed today: pgvector, embeddings key, Redis, Celery, OCR, **Apify**.
+
+### Web page sources (direct fetch — live today)
+
+Evidence tab → **Add a web source**, or `POST /api/projects/{id}/sources`:
+
+```json
+{ "url": "https://catalog.example.com/product/valve" }
+```
+
+The file-service fetches the page with **direct HTTP** (`WEB_FETCH_PROVIDER=direct`,
+the default). HTML is stored in object storage as `type=web` with `sourceUrl`.
+Evidence re-scan runs the same label→field rules as PDFs. Quotes show the URL
+and **web** badge. PDF vs web disagreement → `conflicting` (feeds M5 Review).
+
+**Paste HTML** (no network, no API):
+
+```json
+{
+  "url": "https://catalog.example.com/product/valve",
+  "html": "<html>…Model: ABC-100…</html>"
+}
+```
+
+Use this when the site is JavaScript-heavy and direct fetch returns empty HTML.
+
+### Web fetch providers (optional — not required now)
+
+| `WEB_FETCH_PROVIDER` | Env vars | Status |
+| --- | --- | --- |
+| `direct` (default) | none | ✅ Live |
+| `apify` | `APIFY_API_TOKEN`, `APIFY_ACTOR_ID` | ⏳ Placeholder — **not wired**; setting these does nothing yet |
+| `custom` | `WEB_FETCH_API_URL`, optional `WEB_FETCH_API_KEY` | ✅ Live if you run your own fetch API |
+
+If you created an Apify account and Actor, you can add credentials to `.env` for
+later — ForgeData will not call Apify until `_fetch_apify` is implemented.
+Until then, use **direct** or **paste HTML**.
+
+Example `.env` for direct-only (recommended now):
+
+```env
+# WEB_FETCH_PROVIDER=direct   # omit or leave commented — same as direct
+```
+
+Do **not** set `WEB_FETCH_PROVIDER=apify` until the integration ships — you will
+get HTTP 501 on URL-only ingest.
 
 ### How to test M4
 
 - **Automated:** `python -m pytest tests/unit/test_evidence.py tests/module/test_evidence_api.py -q`
-- **End to end:** start all services (`scripts/run-dev.ps1`), open a job that has a
-  datasheet PDF, click **Evidence**. First visit auto-scans; use **Re-scan
-  documents** to re-run. Seed data (`Meridian_MFC-GV-100`) shows `285 PSI`;
-  the `VB-220` pair shows a **conflicting** temperature (`600` vs `720`).
+- **End to end:** start all services (`scripts/run-dev.ps1`), open a job, click **Evidence**.
+  Upload a PDF or add a web URL, then re-scan. Seed PDF (`Meridian_MFC-GV-100`) shows
+  `285 PSI`; `VB-220` datasheet + catalog pair shows **conflicting** pressure.
 
 ---
 
@@ -397,9 +449,10 @@ backend/
 ├── shared/                     schemas + SQLAlchemy models
 ├── services/
 │   ├── project_service/        :8001 — job CRUD
-│   ├── file_service/           :8002 — uploads, S3/MinIO, SHA-256 dedup
-│   └── question_service/       :8003 — completeness loop
-├── alembic/                    001 projects, 002 documents, 003 questions, 004 attributes
+│   ├── file_service/           :8002 — uploads, web sources, S3/MinIO
+│   ├── question_service/       :8003 — completeness loop
+│   └── evidence_service/       :8004 — cited attributes (PDF + web)
+├── alembic/                    001–005 (projects, documents+source_url, questions, attributes)
 ├── docker-compose.yml          Postgres (:5433) + MinIO (:9000)
 ├── scripts/run-dev.sh          start gateway + all services (:8001–:8004)
 ├── scripts/run-dev.ps1         same on Windows PowerShell
@@ -417,6 +470,7 @@ backend/
 | GET | `/api/projects/{id}` | ✅ M1 (+ documents M2) |
 | DELETE | `/api/projects/{id}` | ✅ M1 |
 | POST | `/api/projects/{id}/files` | ✅ M2 |
+| POST | `/api/projects/{id}/sources` | ✅ M4 (web; direct fetch or paste HTML) |
 | GET | `/api/projects/{id}/attributes` | ✅ M4 |
 | POST | `/api/projects/{id}/attributes/extract` | ✅ M4 |
 | GET | `/api/projects/{id}/questions` | ✅ M3 |

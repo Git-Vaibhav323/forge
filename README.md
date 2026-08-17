@@ -69,13 +69,15 @@ This starts:
 | --- | --- | --- |
 | Gateway | **8000** | Public API (frontend connects here) |
 | project-service | 8001 | Job CRUD |
-| file-service | 8002 | File uploads + MinIO |
+| file-service | 8002 | File uploads + web sources + object storage |
 | question-service | 8003 | Completeness + one-question loop |
+| evidence-service | 8004 | PDF/web extraction → cited attributes |
 
 Verify:
 
 ```bash
 curl http://127.0.0.1:8000/health    # {"status":"ok","mode":"gateway"}
+curl http://127.0.0.1:8004/health    # evidence-service
 open http://127.0.0.1:8000/docs
 ```
 
@@ -96,7 +98,7 @@ npm run dev
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
-Open **http://localhost:3000**. Create a job with a file — it persists to Postgres (or Supabase) and object storage. Questions are live. Evidence is next (M4).
+Open **http://localhost:3000**. Create a job with a file — it persists to Postgres (or Supabase) and object storage. Questions and **Evidence** (PDF + web sources) are live. Review is next (M5).
 
 ---
 
@@ -134,42 +136,35 @@ Run `npm run dev` only — the UI uses seeded mock data from `lib/mock-data.ts`.
 
 ## What's live today
 
-**M1–M3 are done.** The next build is **M4 — evidence-service** (PDF → cited attributes).
+**M1–M4 are done.** The next build is **M5 — review-service** (conflict / high-risk approval queue).
 
 | Feature | Status |
 | --- | --- |
 | Dashboard — list/create/remove jobs | ✅ Live API (M1) |
 | Open a job — upload files | ✅ Live API (M2) |
 | Questions + completion score | ✅ Live API (M3) |
-| Evidence tab | ⏳ Next — M4 |
+| Evidence tab — PDF + cited fields | ✅ Live API (M4) |
+| Evidence tab — web page sources | ✅ Live API (**direct fetch** or paste HTML) |
 | Review, Outputs tabs | Mock / stub (M5–M8) |
 
-Live frontend functions in `lib/api.ts`: `listProjects`, `getProject`, `createProject`, `deleteProject`, `uploadDocument`, `listQuestions`, `answerQuestion`.
+Live frontend functions in `lib/api.ts`: `listProjects`, `getProject`, `createProject`, `deleteProject`, `uploadDocument`, `addWebSource`, `listQuestions`, `answerQuestion`, `listAttributes`, `extractAttributes`.
 
 Hosted DB/files: set `POSTGRES_*` and `OBJECT_STORAGE_*` in `backend/.env` (see **Switch to Supabase** in `backend/README.md`). Local Docker Postgres/MinIO still works.
 
----
+### Web sources (no Apify required)
 
-## Ready for M4 — prerequisites
+On the **Evidence** tab you can add a manufacturer/catalog **URL**. ForgeData stores the page and cites labelled facts from it — same rules as PDFs (never invent; disagreements become `conflicting` for M5 Review).
 
-M4 is **evidence-service** (`:8004`). It reads uploaded PDFs, extracts text, stores chunks with embeddings (**pgvector**), and fills the Evidence tab with cited fields (`attribute`, `value`, `source`, `page`, `evidence`, `confidence`). It must **not** invent values.
-
-You already have everything for a first M4 slice if:
-
-| Need | Why | You have it when… |
+| Mode | Config | When to use |
 | --- | --- | --- |
-| M1–M3 running | Jobs, files, questions exist | Gateway `:8000` healthy; Questions tab works |
-| PDFs on a job | Extractor needs bytes in object storage | Overview shows documents; bucket `forgedata` has `prj-…/doc-…/*.pdf` |
-| Postgres | New tables: chunks, embeddings, attributes | Same DB as M1–M3 (local **5433** or **Supabase**) |
-| **pgvector** | Vector search over page quotes | **Supabase:** already enabled. **Local Docker:** enable the extension in M4 (`CREATE EXTENSION vector`) |
-| Python packages (added in M4) | `pymupdf` (text), `pgvector`, later OCR (`ocrmypdf`) if the PDF is a scan | Not installed yet — M4 will pin them in `backend/requirements.txt` |
-| Embeddings API key | Turn chunks into vectors | Optional at the start (can hash/embed later). Set `LLM_API_KEY` / provider when retrieval is wired |
+| **Direct fetch** (default) | Nothing — `WEB_FETCH_PROVIDER` unset or `direct` | Public HTML catalog pages |
+| **Paste HTML** | No API — expand “paste HTML” on Evidence | JS-heavy sites that block simple fetch |
+| **Apify** | `WEB_FETCH_PROVIDER=apify` + token/actor | **Not wired yet** — env placeholders only |
+| **Custom scraper** | `WEB_FETCH_PROVIDER=custom` + `WEB_FETCH_API_URL` | Your own fetch API |
 
-Not required for M4: Redis, LangGraph, review-service, or a separate vector host.
+You do **not** need Apify credentials for the current build. If you created an Apify account, keep the token for later — ForgeData does not call it until `_fetch_apify` is implemented.
 
-**Do this before writing M4 code:** pick one PDF job that already uploaded (e.g. a seeded datasheet). M4’s first test is: that file → attributes with page + quote on the Evidence tab.
-
-Details: `plan.md` → **M4 — evidence-service**. Backend notes: `backend/README.md`.
+Details: `backend/README.md` → **Web page sources**. Roadmap: `plan.md` → **M5 — review-service**.
 
 ---
 
@@ -230,7 +225,7 @@ forge/
 │   └── api.ts           mock/live seam
 ├── backend/
 │   ├── gateway/         public API :8000
-│   ├── services/        project :8001, file :8002, question :8003
+│   ├── services/        project :8001, file :8002, question :8003, evidence :8004
 │   ├── shared/          schemas + DB models
 │   └── README.md        backend details
 ├── plan.md              microservices build plan

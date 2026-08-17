@@ -140,6 +140,8 @@ class ProjectDocument(BaseModel):
     status: str = "pending"
     uploaded_at: datetime = Field(alias="uploadedAt")
     pages: Optional[int] = None
+    # Present when this document was ingested from a pasted/fetched URL.
+    source_url: Optional[str] = Field(default=None, alias="sourceUrl")
 
     class Config:
         populate_by_name = True

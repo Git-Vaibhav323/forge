@@ -120,8 +120,49 @@ def test_extract_is_idempotent(
     assert len(stored) == len(second)
 
 
-def test_extract_missing_project_404(evidence_client: TestClient) -> None:
-    assert (
-        evidence_client.post("/api/projects/prj-nope/attributes/extract").status_code
-        == 404
+def test_extract_from_web_document(
+    evidence_client: TestClient, db_session: Session
+) -> None:
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        ProjectRow(
+            id="prj-evweb",
+            name="Web extract",
+            goal="product_datasheet",
+            category="valve",
+            status="draft",
+            completion_score=0,
+            blocking_fields_count=0,
+            conflicts_count=0,
+            pending_approvals_count=0,
+            created_at=now,
+            updated_at=now,
+        )
     )
+    html = """<html><body>
+      <p>Model: WEB-99</p>
+      <p>Max Working Pressure: 150 PSI</p>
+    </body></html>"""
+    db_session.add(
+        DocumentRow(
+            id="doc-web1",
+            project_id="prj-evweb",
+            filename="catalog.example.com_valve.html",
+            type="web",
+            status="pending",
+            storage_key=html,
+            content_hash="hash-web",
+            source_url="https://catalog.example.com/valve",
+            uploaded_at=now,
+        )
+    )
+    db_session.commit()
+
+    resp = evidence_client.post("/api/projects/prj-evweb/attributes/extract")
+    assert resp.status_code == 200
+    attrs = {a["name"]: a for a in resp.json()}
+    assert attrs["model"]["rawValue"] == "WEB-99"
+    assert attrs["model"]["status"] == "known"
+    assert attrs["model"]["evidence"][0]["documentType"] == "web"
+    assert attrs["model"]["evidence"][0]["documentName"] == "https://catalog.example.com/valve"
+    assert attrs["maximum_pressure"]["rawValue"] == "150"

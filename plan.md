@@ -257,21 +257,22 @@ Integrate in dependency order. Each row is one merge milestone — do not wire t
 
 ---
 
-### M4 — evidence-service
+### M4 — evidence-service ✅ DONE
 
 **Unlocks:** Evidence tab  
-**Calendar:** 2–3 weeks  
-**Depends on:** M2 (`FileUploaded` or poll document status)
+**Depends on:** M2 (documents in object storage)
 
 | Work | Detail |
 | --- | --- |
-| Build | PyMuPDF extract, OCR fallback, chunk+embed (pgvector), map to `Attribute` records |
-| Unit tests | Chunk boundaries, confidence thresholds, conflict marking (two sources → `conflicting`) |
-| Module tests | Sample PDF in MinIO → attributes rows with page + quoted evidence |
-| Gateway | Proxy `GET /api/projects/{id}/attributes` |
-| Frontend | `listAttributes` |
+| Build | `pypdf` per-page text + deterministic label→field rules → `Attribute` records with cited page + quote. **Key-free** (no embeddings/pgvector); same wire shape so semantic RAG is a drop-in later. |
+| Unit tests | `test_evidence.py` — parse, missing-not-invented, agreement raises confidence, conflict flagged (two sources → `conflicting`). |
+| Module tests | `test_evidence_api.py` — seeded PDFs → attribute rows with page + quoted evidence, conflict count, idempotent re-scan. |
+| Gateway | Proxy `GET /api/projects/{id}/attributes` + `POST …/attributes/extract` → :8004. |
+| Frontend | `listAttributes` live; `extractAttributes` (re-scan); Evidence tab auto-scans on first open. |
 
-**Done when:** Evidence tab shows real fields; missing stays missing; conflicts not merged.
+**Done when:** Evidence tab shows real cited fields; missing stays missing; conflicts not merged. ✅
+
+**Deferred (drop-in upgrades):** OCR for scanned PDFs, pgvector + embeddings for semantic retrieval, unit normalization (Pint). **Web page sources (URL paste / fetch) are live** — optional Apify/custom fetch providers remain config stubs.
 
 ---
 
@@ -354,7 +355,7 @@ When a service is merged and module tests pass, change only the matching functio
 | M1 | `listProjects`, `getProject`, `createProject` | ✅ live |
 | M2 | `uploadDocument` | ✅ live |
 | M3 | `listQuestions`, `answerQuestion` | ✅ live |
-| M4 | `listAttributes` | mock |
+| M4 | `listAttributes`, `extractAttributes` | ✅ live |
 | M5 | `listReviewItems`, `submitReviewDecision` | mock |
 | M8 | `listOutputs`, `generateOutput` | mock |
 
@@ -376,7 +377,7 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 | **question-service** | `:8003` | ✅ |
 | **PostgreSQL** | Host port **5433** → container 5432 | ✅ |
 | **MinIO** | `:9000` API, `:9001` console | ✅ |
-| **pgvector** | evidence-service embeddings | M4 |
+| **pgvector** | evidence-service embeddings | deferred (M4 ships key-free) |
 | **Redis** | Events, LangGraph interrupts | M5+ |
 
 `backend/.env.example` has all required vars for M1–M3. Copy to `backend/.env`.

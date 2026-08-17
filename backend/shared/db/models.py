@@ -40,6 +40,7 @@ class DocumentRow(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="processing")
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

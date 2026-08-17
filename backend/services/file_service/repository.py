@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -69,6 +71,64 @@ def store_upload(
         status="processing",
         content_hash=content_hash,
         storage_key=storage_key,
+        uploaded_at=datetime.now(timezone.utc),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row, existing is not None
+
+
+def _web_filename(url: str) -> str:
+    parsed = urlparse(url)
+    host = parsed.hostname or "web"
+    path = (parsed.path or "/").rstrip("/") or "page"
+    slug = re.sub(r"[^\w.\-]+", "_", f"{host}{path}")[:80].strip("_") or "page"
+    return sanitize_filename(f"{slug}.html")
+
+
+def store_web_source(
+    db: Session,
+    *,
+    project_id: str,
+    source_url: str,
+    html: str,
+    intent: UploadIntent | None = None,
+) -> tuple[DocumentRow, bool]:
+    """Persist a fetched or pasted web page as a citeable document."""
+    content = html.encode("utf-8")
+    content_hash = hashlib.sha256(content).hexdigest()
+    safe_name = _web_filename(source_url)
+    existing = find_document_by_project_and_hash(db, project_id, content_hash)
+
+    if existing and intent is None:
+        raise DuplicateFileError(existing)
+
+    if existing and intent == "replace":
+        remove_object(existing.storage_key)
+        existing.filename = safe_name
+        existing.type = "web"
+        existing.status = "processing"
+        existing.source_url = source_url
+        existing.storage_key = build_storage_key(project_id, existing.id, safe_name)
+        existing.uploaded_at = datetime.now(timezone.utc)
+        put_object(existing.storage_key, content, "text/html; charset=utf-8")
+        db.commit()
+        db.refresh(existing)
+        return existing, True
+
+    document_id = generate_document_id()
+    storage_key = build_storage_key(project_id, document_id, safe_name)
+    put_object(storage_key, content, "text/html; charset=utf-8")
+    row = DocumentRow(
+        id=document_id,
+        project_id=project_id,
+        filename=safe_name,
+        type="web",
+        status="processing",
+        content_hash=content_hash,
+        storage_key=storage_key,
+        source_url=source_url,
         uploaded_at=datetime.now(timezone.utc),
     )
     db.add(row)

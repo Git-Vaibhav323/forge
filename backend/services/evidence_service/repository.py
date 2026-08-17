@@ -14,6 +14,7 @@ from services.evidence_service.extraction import (
     parse_page,
 )
 from shared.completeness import required_fields
+from shared.html_text import html_to_text
 from shared.db.models import (
     AttributeEvidenceRow,
     AttributeRow,
@@ -21,6 +22,8 @@ from shared.db.models import (
     ProjectRow,
 )
 from shared.schemas import Attribute
+
+TEXT_DOC_TYPES = {"pdf", "document", "web", "html", "webpage"}
 
 
 def _attr_id() -> str:
@@ -90,6 +93,14 @@ def _read_pdf_bytes(storage_key: str) -> bytes:
     return get_object(storage_key)
 
 
+def _pages_from_bytes(data: bytes, doc_type: str) -> list[str]:
+    if doc_type in {"web", "html", "webpage"}:
+        raw = data.decode("utf-8", errors="replace")
+        text = html_to_text(raw) if "<" in raw[:200].lower() or "</" in raw else raw
+        return [text]
+    return extract_pages_from_pdf(data)
+
+
 def _collect_hits(db: Session, project_id: str) -> list[Hit]:
     documents = list(
         db.scalars(
@@ -100,22 +111,23 @@ def _collect_hits(db: Session, project_id: str) -> list[Hit]:
     )
     hits: list[Hit] = []
     for doc in documents:
-        if doc.type not in {"pdf", "document"}:
+        if doc.type not in TEXT_DOC_TYPES:
             continue
         try:
             data = _read_pdf_bytes(doc.storage_key)
-            pages = extract_pages_from_pdf(data)
+            pages = _pages_from_bytes(data, doc.type)
         except Exception:
             # A single unreadable document must not fail the whole extraction.
             doc.status = "failed"
             continue
+        display_name = doc.source_url or doc.filename
         for index, text in enumerate(pages, start=1):
             hits.extend(
                 parse_page(
                     text=text,
                     page=index,
                     document_id=doc.id,
-                    document_name=doc.filename,
+                    document_name=display_name,
                     document_type=doc.type,
                 )
             )
