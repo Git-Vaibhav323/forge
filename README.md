@@ -1,9 +1,9 @@
 # ForgeData
 
-Evidence-grounded industrial product intelligence. Turns fragmented product
-data (datasheets, images, incomplete catalogs, RFQs) into a complete,
-validated, human-approved output — configuration, BOM, quote, datasheet,
-installation package, or RFQ response.
+Evidence-grounded product intelligence for **industrial equipment and non-industrial
+projects alike** (replacement specs, RFQs, datasheets, BOMs, tech migrations, etc.).
+Turns fragmented data (PDFs, web pages, incomplete catalogs) into a complete,
+validated, human-approved output.
 
 Every field carries its source. Nothing gets invented. Conflicts and
 high-risk fields always pause for human approval.
@@ -70,8 +70,8 @@ This starts:
 | Gateway | **8000** | Public API (frontend connects here) |
 | project-service | 8001 | Job CRUD |
 | file-service | 8002 | File uploads + web sources + object storage |
-| question-service | 8003 | Completeness + one-question loop |
-| evidence-service | 8004 | PDF/web extraction → cited attributes |
+| question-service | 8003 | Hybrid question engine + completeness loop |
+| evidence-service | 8004 | PDF/web extraction → cited attributes (synced with Questions) |
 | review-service | 8005 | Conflict / high-risk holds, decisions, propagation |
 | relationship-service | 8006 | Variants, compatibility, BOM (internal — not proxied) |
 | vision-service | 8007 | Nameplate OCR (internal — not proxied; OCR off by default) |
@@ -102,7 +102,9 @@ npm run dev
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
-Open **http://localhost:3000**. Create a job with a file — it persists to Postgres (or Supabase) and object storage. Questions, **Evidence** (PDF + web sources), and **Review** (conflicts + high-risk holds) are live. Outputs is next (M8).
+Open **http://localhost:3000**. Create a job with a file — it persists to Postgres (or Supabase) and object storage. **Questions** and **Evidence** stay in sync: answers on Questions appear as verified fields on Evidence. **Review** (conflicts + high-risk holds) and **Outputs** are live.
+
+> **Important:** Without `.env.local` pointing at the gateway, the UI runs in **mock mode** (no live questions or evidence). Always set `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`.
 
 ---
 
@@ -146,9 +148,11 @@ Run `npm run dev` only — the UI uses seeded mock data from `lib/mock-data.ts`.
 | --- | --- |
 | Dashboard — list/create/remove jobs | ✅ Live API (M1) |
 | Open a job — upload files | ✅ Live API (M2) |
-| Questions + completion score | ✅ Live API (M3) |
-| Evidence tab — PDF + cited fields | ✅ Live API (M4) |
+| Questions + completion score | ✅ Live API (M3 — hybrid engine, goal-aware) |
+| Evidence tab — PDF + cited fields | ✅ Live API (M4 — synced with Questions) |
 | Evidence tab — web page sources | ✅ Live API (**direct fetch** or paste HTML) |
+| Non-industrial jobs (e.g. techstack replacement) | ✅ Goal-only fields, scenario wording |
+| Optional LLM question wording | ✅ Gemini / Groq (rules fallback when off) |
 | Review tab — conflicts, high-risk holds, approvals | ✅ Live API (M5) |
 | Compatibility checks + BOM resolution | ✅ Live (M6 — internal, feeds Review) |
 | Nameplate photos as a cited source | ✅ Live (M7 — needs `OCR_PROVIDER`, off by default) |
@@ -208,6 +212,8 @@ Two kinds of QA result, and the difference matters:
 Details: `backend/README.md` → **M8**.
 
 Hosted DB/files: set `POSTGRES_*` and `OBJECT_STORAGE_*` in `backend/.env` (see **Switch to Supabase** in `backend/README.md`). Local Docker Postgres/MinIO still works.
+
+**Optional LLM** (contextual question text): add `LLM_PROVIDER=gemini`, `LLM_API_KEY`, and `LLM_MODEL=gemini-2.0-flash` to `backend/.env`. Without a key, rules + scenario templates still work. Restart backend after changing env.
 
 ### Web sources (no Apify required)
 
@@ -286,7 +292,7 @@ forge/
 │   ├── services/        project :8001, file :8002, question :8003,
 │   │                    evidence :8004, review :8005, relationship :8006,
 │   │                    vision :8007, generation :8008
-│   ├── shared/          schemas + DB models
+│   ├── shared/          schemas, DB models, question engine, record sync
 │   └── README.md        backend details
 ├── plan.md              microservices build plan
 └── context.md           architecture + rules
@@ -308,5 +314,7 @@ Backend tests:
 ```bash
 cd backend && source .venv/bin/activate && pytest
 ```
+
+181 tests — unit + module (see `backend/README.md` for breakdown).
 
 See **`backend/README.md`** for backend architecture, env vars, and API contract.

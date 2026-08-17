@@ -6,8 +6,8 @@ only talks to the gateway; it proxies to internal services.
 ```
 Frontend → gateway :8000 → project-service  :8001  (jobs CRUD)
                          → file-service     :8002  (uploads + MinIO)
-                         → question-service :8003  (completeness loop)
-                         → evidence-service :8004  (cited attributes / evidence)
+                         → question-service :8003  (hybrid question engine)
+                         → evidence-service :8004  (cited attributes + sync)
                          → review-service   :8005  (conflict / high-risk holds)
                          → generation-service :8008 (outputs + QA gate + download)
 
@@ -126,7 +126,7 @@ uvicorn gateway.main:app --reload --port 8000
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8001/health
 curl http://127.0.0.1:8002/health
-curl http://127.0.0.1:8003/health
+curl http://127.0.0.1:8003/health   # shows llm provider + hybrid engine
 curl http://127.0.0.1:8004/health
 curl http://127.0.0.1:8005/health
 curl http://127.0.0.1:8006/health
@@ -206,22 +206,23 @@ Same SHA-256 content on the same project:
 
 ## Environment variables (`backend/.env`)
 
-Copy from `.env.example`. Required for M1–M3:
+Copy from `.env.example`. Required for M1–M4:
 
 | Variable | Value | Used by |
 | --- | --- | --- |
-| `DATABASE_URL` | `postgresql+psycopg://forgedata:forgedata@localhost:5433/forgedata` | project + file services |
+| `DATABASE_URL` or `POSTGRES_*` | local Docker or Supabase pooler | all DB services |
 | `PROJECT_SERVICE_URL` | `http://localhost:8001` | gateway, file-service |
 | `FILE_SERVICE_URL` | `http://localhost:8002` | gateway |
 | `QUESTION_SERVICE_URL` | `http://localhost:8003` | gateway |
-| `OBJECT_STORAGE_ENDPOINT` | `localhost:9000` | file-service |
-| `OBJECT_STORAGE_ACCESS_KEY` | `forgedata` | file-service |
-| `OBJECT_STORAGE_SECRET_KEY` | `forgedata` | file-service |
-| `OBJECT_STORAGE_BUCKET` | `forgedata` | file-service |
-| `OBJECT_STORAGE_SECURE` | `false` | file-service |
-| `OBJECT_STORAGE_REGION` | `us-east-1` | file-service (Supabase: your project region) |
+| `EVIDENCE_SERVICE_URL` | `http://localhost:8004` | gateway |
+| `OBJECT_STORAGE_*` | MinIO locally or Supabase Storage S3 | file-service |
 | `CORS_ORIGINS` | `http://localhost:3000` | all services |
-| `POSTGRES_HOST` / `POSTGRES_PASSWORD` | (Supabase) | all DB services — preferred over a raw `DATABASE_URL` when the password contains `%` |
+| `LLM_PROVIDER` | `off` / `gemini` / `groq` | question-service (optional) |
+| `LLM_API_KEY` | API key from provider | question-service (optional) |
+| `LLM_MODEL` | e.g. `gemini-2.0-flash` | question-service (optional) |
+
+**Supabase tip:** use `POSTGRES_HOST`, `POSTGRES_PASSWORD`, etc. instead of a raw
+`DATABASE_URL` when the password contains `%` or other special characters.
 
 ---
 
@@ -236,15 +237,23 @@ Copy from `.env.example`. Required for M1–M3:
 
 **Hybrid question selection** (`shared/question_engine.py`):
 
-1. **Goal + category schema** — base required fields (`shared/completeness.py`)
-2. **Conditional rules** — extra fields when answers match (e.g. Hazardous area → area class)
-3. **Evidence pre-fill** — `known`/`verified` attributes from M4 skip those questions
-4. **Optional LLM ranker** — picks which gap to ask first (falls back to priority sort)
+1. **Goal + category schema** — base required fields (`shared/completeness.py`, `shared/field_registry.py`)
+2. **Goal-only jobs** — replacement, RFQ, datasheet, etc. skip the generic COMMON catalog on Questions (e.g. a techstack replacement asks only 2 fields, not manufacturer/model)
+3. **Conditional rules** — extra fields when answers match (e.g. Hazardous area → area class)
+4. **Evidence pre-fill** — `known`/`verified` attributes from M4 skip those questions
+5. **Scenario copy** — goal- and category-aware wording for industrial and non-industrial jobs (`shared/scenario_copy.py`)
+6. **Optional LLM planner** — picks the next field **and** writes contextual question text (falls back to rules + templates)
 
-One open question at a time. `"Not applicable"` completes a field; `"I don't know"` / `"idk"` do not.
+One open question at a time. `"Not applicable"` completes a field; `"I don't know"` / `"idk"` / `"unknown"` do not.
 User answers override evidence. Answers persist in `questions`; `completionScore` updates on the job.
 
-**Free LLM (optional)** — add to `backend/.env`:
+**Questions ↔ Evidence sync** (`shared/record_sync.py`):
+
+- After each answer (and on Evidence GET), satisfied question answers are promoted to **verified** attributes with a `user-answer` evidence quote.
+- Stale attribute rows from old scans are pruned so Evidence shows only fields relevant to the job.
+- Re-scan preserves user-confirmed answers from the Questions tab.
+
+**Free LLM (optional)** — add to `backend/.env` and restart `./scripts/run-dev.sh`:
 
 | Provider | Get key | Env |
 | --- | --- | --- |
@@ -252,7 +261,16 @@ User answers override evidence. Answers persist in `questions`; `completionScore
 | **Groq** (alternative) | [console.groq.com](https://console.groq.com/) | `LLM_PROVIDER=groq`, `LLM_API_KEY=...`, `LLM_MODEL=llama-3.1-8b-instant` |
 | **Off** (rules only) | — | `LLM_PROVIDER=off` |
 
-Without a key, layers 1–3 still work; layer 4 uses critical → high priority ordering.
+Without a key, layers 1–5 still work; layer 6 uses critical → high priority ordering.
+
+Verify LLM is loaded (not just configured):
+
+```bash
+curl http://127.0.0.1:8003/health
+# {"status":"ok","service":"question-service","llm":"gemini","questionEngine":"hybrid"}
+```
+
+If `"llm":"off"`, the key is missing or `LLM_PROVIDER=off`. If the provider is set but questions stay generic, check backend logs for `API_KEY_INVALID` — create a fresh key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) with no HTTP-referrer restriction (server-side calls).
 
 ---
 
@@ -262,8 +280,14 @@ Without a key, layers 1–3 still work; layer 4 uses critical → high priority 
 
 | Method | Path | Status |
 | --- | --- | --- |
-| `GET` | `/api/projects/{id}/attributes` | ✅ (stored, cited) |
-| `POST` | `/api/projects/{id}/attributes/extract` | ✅ (re-scan PDFs + web) |
+| `GET` | `/api/projects/{id}/attributes` | ✅ (schema + synced user answers) |
+| `POST` | `/api/projects/{id}/attributes/extract` | ✅ (re-scan PDFs + web; preserves Questions answers) |
+
+**Goal-aware extraction** (`shared/evidence_fields.py`):
+
+- **Goal-only jobs** (replacement, RFQ): Evidence shows only scenario fields — not six generic MISSING catalog rows.
+- **Document-heavy jobs** (datasheet, BOM, configuration): Evidence also extracts manufacturer, model, ratings, etc. from uploads.
+- Fields found in PDFs/web but outside the question schema are kept when they carry document evidence.
 
 **File-service** also exposes web ingest (proxied through gateway):
 
@@ -340,7 +364,13 @@ Example `.env` for direct-only (recommended now):
 Do **not** set `WEB_FETCH_PROVIDER=apify` until the integration ships — you will
 get HTTP 501 on URL-only ingest.
 
-### How to test M4
+### How to test M3 + M4 sync
+
+- **Automated:** `python -m pytest tests/unit/test_question_engine.py tests/unit/test_llm_ranker.py tests/module/test_record_sync.py tests/module/test_questions_api.py tests/unit/test_evidence.py tests/module/test_evidence_api.py -q`
+- **End to end:** create a **replacement_recommendation** job (any category), answer both questions, open **Evidence** — only the two scenario fields appear, marked **verified** with your answers.
+- **Industrial:** upload a valve datasheet, re-scan Evidence — model/pressure appear with page quotes; conflicting sources flag `conflicting`.
+
+### How to test M4 (extraction only)
 
 - **Automated:** `python -m pytest tests/unit/test_evidence.py tests/module/test_evidence_api.py -q`
 - **End to end:** start all services (`scripts/run-dev.ps1`), open a job, click **Evidence**.
@@ -770,11 +800,19 @@ TEST_DATABASE_URL=postgresql+psycopg://forgedata:forgedata@localhost:5433/forged
 ```
 backend/
 ├── gateway/                    Public API :8000
-├── shared/                     schemas + SQLAlchemy models
+├── shared/
+│   ├── completeness.py         required-field catalog + goal-only rules
+│   ├── field_registry.py       schema + conditional field activation
+│   ├── conditional_rules.py    answer-triggered extra fields
+│   ├── question_engine.py      hybrid pick-next-question
+│   ├── scenario_copy.py        goal/category-aware question wording
+│   ├── llm_ranker.py           optional Gemini/Groq planner
+│   ├── record_sync.py          Questions ↔ Evidence sync
+│   └── evidence_fields.py      goal-aware Evidence field sets
 ├── services/
 │   ├── project_service/        :8001 — job CRUD
 │   ├── file_service/           :8002 — uploads, web sources, S3/MinIO
-│   ├── question_service/       :8003 — completeness loop
+│   ├── question_service/       :8003 — hybrid question engine
 │   ├── evidence_service/       :8004 — cited attributes (PDF + web)
 │   ├── review_service/         :8005 — conflict / high-risk approval queue
 │   ├── relationship_service/   :8006 — variants, compatibility, BOM (internal)
@@ -783,7 +821,7 @@ backend/
 ├── alembic/                    001–008 (projects, documents+source_url, questions,
 │                               attributes, reviews, relationships, outputs)
 │                               M7 added no tables — images reuse `documents`
-├── docker-compose.yml          Postgres (:5433) + MinIO (:9000)
+├── docker-compose.yml          Postgres (:5433) + MinIO (:9000) — optional if using Supabase
 ├── scripts/run-dev.sh          start gateway + all services (:8001–:8008)
 ├── scripts/run-dev.ps1         same on Windows PowerShell
 └── app/config.py               shared settings (all that remains of the monolith)
