@@ -76,8 +76,15 @@ forgedata/
 │   │   ├── project_service/  :8001 jobs
 │   │   ├── file_service/     :8002 uploads + web sources
 │   │   ├── question_service/ :8003 completeness loop
-│   │   └── evidence_service/ :8004 cited attributes
-│   └── shared/               schemas + SQLAlchemy models
+│   │   ├── evidence_service/ :8004 cited attributes
+│   │   ├── review_service/   :8005 conflict / high-risk approval queue
+│   │   ├── relationship_service/ :8006 variants, compatibility, BOM (internal)
+│   │   ├── vision_service/   :8007 nameplate OCR inspection (internal)
+│   │   └── generation_service/ :8008 outputs, QA gate, download
+│   └── shared/               schemas, models, risk.py, normalization.py,
+│                             review_sync.py, compatibility.py, bom.py,
+│                             relationship_sync.py, ocr.py, qa.py,
+│                             output_render.py
 └── docs/                     design + demo notes
 ```
 
@@ -101,7 +108,9 @@ field-level JSON is:
 ```
 
 - Frontend source of truth: `lib/types.ts`
-- Backend mirror: `backend/app/models/schemas.py`
+- Backend mirror: `backend/shared/schemas.py`
+  (`backend/app/models/schemas.py` is now just a re-export kept for the
+  deprecated monolith — do not edit it)
 
 If you change one, change the other. The Evidence panel, Attribute table,
 Review console, and Question loop all render directly off these types — an
@@ -172,11 +181,18 @@ The frontend is done and demoable on mock data. Backend milestones:
 2. **M4 ✅** — evidence-service: PDF + web sources → cited attributes (Evidence live).
    Key-free extraction (`pypdf` + label rules). pgvector/LLM deferred.
    Web ingest via `POST /api/projects/{id}/sources`; **direct fetch only** for now.
-3. **M5** — review-service: Pint normalization, conflict/high-risk queue, decisions,
-   bulk propagate → Review tab live.
-4. **M6** — relationship-service: variants, BOM, compatibility.
-5. **M7** — vision-service: nameplate OCR, image sources.
-6. **M8** — generation-service: outputs + QA gate.
+3. **M5 ✅** — review-service: Pint normalization, conflict/high-risk queue, decisions,
+   bulk propagate → Review tab live. Items keyed on (job, field) so decisions
+   survive an evidence re-scan. Canonical risk list in `shared/risk.py`.
+4. **M6 ✅** — relationship-service: variants, BOM, compatibility. Requirement
+   (your answer) vs rating (datasheet quote); rules that cannot be decided from
+   the sources abstain. Failures become `incompatible` review holds.
+5. **M7 ✅** — vision-service: nameplate OCR, image sources. OCR defaults **off**
+   (no system binaries needed). Images feed the same extraction rules as PDFs; a
+   photo alone is `unverified`, never `known`. Cleanup never repairs characters.
+6. **M8 ✅** — generation-service: outputs + QA gate. A value is printed only if
+   publishable **and** cited; everything withheld is listed with its reason.
+   Conflicts and open holds block the print entirely.
 
 Optional upgrades (not blocking M5): Apify actor for web fetch, pgvector RAG,
 OCR for scanned PDFs.

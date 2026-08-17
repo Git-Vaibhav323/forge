@@ -51,7 +51,13 @@ export interface ConflictValue {
   evidenceId?: string;
 }
 
-export type IssueType = "conflict" | "high_risk" | "duplicate" | "bulk_propagation";
+export type IssueType =
+  | "conflict"
+  | "high_risk"
+  | "duplicate"
+  | "bulk_propagation"
+  /** Sources agree, but the value does not meet the stated requirement (M6). */
+  | "incompatible";
 export type ReviewStatus = "pending" | "approved" | "edited" | "rejected" | "unresolved";
 
 export interface ReviewItem {
@@ -159,6 +165,60 @@ export interface Project {
   pendingApprovalsCount: number;
 }
 
+// ---------------------------------------------------------------------------
+// Relationships / compatibility / BOM (M6)
+// Mirrors backend/shared/schemas.py. Served by relationship-service :8006 and
+// consumed by generation-service (M8) — no dedicated tab of its own.
+// ---------------------------------------------------------------------------
+
+export interface ProductRelationship {
+  id: string;
+  projectId: string;
+  relatedProjectId: string;
+  relation: "variant" | "accessory" | "duplicate";
+  /** Why the link was drawn — never asserted without a reason. */
+  basis: string;
+  confidence: number;
+}
+
+/** `unknown` means the rule abstained rather than guessed. */
+export type CompatibilityStatus = "pass" | "fail" | "unknown";
+
+export interface CompatibilityFinding {
+  id: string;
+  projectId: string;
+  rule: string;
+  field: string;
+  status: CompatibilityStatus;
+  severity: Severity;
+  requiredValue?: string;
+  ratedValue?: string;
+  reason: string;
+  evidenceIds: string[];
+}
+
+export type BomLineStatus = "resolved" | "missing" | "unverified";
+
+export interface BomLine {
+  id: string;
+  projectId: string;
+  position: number;
+  role: "primary" | "specification";
+  component: string;
+  quantity?: string;
+  unit?: string;
+  status: BomLineStatus;
+  sourceField?: string;
+  reason: string;
+  evidenceIds: string[];
+}
+
+export interface RelationshipView {
+  variants: ProductRelationship[];
+  findings: CompatibilityFinding[];
+  bomLines: BomLine[];
+}
+
 export type OutputStatus = "draft" | "generated" | "qa_passed" | "qa_failed";
 
 export interface OutputArtifact {
@@ -169,4 +229,10 @@ export interface OutputArtifact {
   status: OutputStatus;
   generatedAt?: string;
   qaNotes?: string[];
+  /**
+   * Gateway-relative download path. Absent when the QA gate blocked
+   * generation — the row records why, but no file exists (M8).
+   */
+  downloadUrl?: string;
+  sizeBytes?: number;
 }

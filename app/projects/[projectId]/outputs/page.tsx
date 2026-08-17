@@ -15,9 +15,10 @@ export default function OutputsPage({
   params: { projectId: string };
 }) {
   const { projectId } = params;
-  const { data: project } = useProject(projectId);
+  const { data: project, refresh: refreshProject } = useProject(projectId);
   const { data: outputs, loading, refresh } = useOutputs(projectId);
   const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string>();
 
   const blocked =
     !!project && (project.conflictsCount > 0 || project.pendingApprovalsCount > 0);
@@ -25,9 +26,14 @@ export default function OutputsPage({
   async function handleGenerate() {
     if (!project) return;
     setGenerating(true);
+    setError(undefined);
     try {
       await api.generateOutput(projectId, project.goal);
       refresh();
+      // The QA gate re-derives the record, so counts and status can move.
+      refreshProject();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setGenerating(false);
     }
@@ -55,6 +61,11 @@ export default function OutputsPage({
               Generation is disabled while conflicts or approvals are pending.
               Resolve them in the Review tab first.
             </p>
+          </CardBody>
+        )}
+        {error && (
+          <CardBody>
+            <p className="text-[13px] text-conflict">Could not print. {error}</p>
           </CardBody>
         )}
       </Card>

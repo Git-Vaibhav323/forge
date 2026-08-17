@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, GitMerge, ShieldAlert, Copy } from "lucide-react";
+import { AlertTriangle, GitMerge, ShieldAlert, Copy, Unlink } from "lucide-react";
 import type { IssueType, ReviewItem, Severity } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Field";
@@ -13,6 +13,7 @@ const issueIcon: Record<IssueType, typeof AlertTriangle> = {
   high_risk: ShieldAlert,
   duplicate: Copy,
   bulk_propagation: AlertTriangle,
+  incompatible: Unlink,
 };
 
 const issueLabel: Record<IssueType, string> = {
@@ -20,6 +21,7 @@ const issueLabel: Record<IssueType, string> = {
   high_risk: "High-risk field",
   duplicate: "Possible duplicate",
   bulk_propagation: "Bulk correction",
+  incompatible: "Does not meet requirement",
 };
 
 const severityTone: Record<Severity, string> = {
@@ -44,8 +46,13 @@ export function ReviewItemCard({
   const [editValue, setEditValue] = useState(item.proposedValue ?? "");
   const [submitting, setSubmitting] = useState(false);
   const Icon = issueIcon[item.issueType];
-  const isBulk = item.issueType === "bulk_propagation";
-  const decided = item.status !== "pending";
+  // A conflict can also be a bulk fix: the backend sets affectedProducts when
+  // sibling jobs carry the same wrong value, without mislabelling the issue.
+  const affected = item.affectedProducts ?? 0;
+  const isBulk = item.issueType === "bulk_propagation" || affected > 1;
+  // "Mark unresolved" parks an item; it still needs a decision, so it keeps
+  // its action buttons (the Review page also lists it under pending).
+  const decided = item.status !== "pending" && item.status !== "unresolved";
 
   async function decide(
     action: "approve" | "edit" | "reject" | "unresolved",
@@ -108,11 +115,10 @@ export function ReviewItemCard({
 
       <p className="mb-3 text-[13px] leading-snug text-muted">{item.reason}</p>
 
-      {isBulk && item.affectedProducts && (
+      {isBulk && affected > 1 && (
         <div className="mb-3 rounded border border-review/30 bg-review-soft/40 px-3 py-2 text-[12px] text-review">
-          This correction may apply to <strong>{item.affectedProducts}</strong>{" "}
-          similar products. Approving reviews a representative sample before
-          applying it to the rest.
+          <strong>{affected}</strong> jobs in this category carry the same
+          value. Approving applies your correction to all of them.
         </div>
       )}
 

@@ -5,6 +5,8 @@ out
 .env.local
 *.log
 .DS_Store
+# Written by `npm run typecheck` / `next build`
+tsconfig.tsbuildinfo
 
 # Python
 .venv/

@@ -360,7 +360,9 @@ export async function listReviewItems(projectId: string): Promise<ReviewItem[]> 
     await simulateLatency();
     return state.reviewItems[projectId] ?? [];
   }
-  return http<ReviewItem[]>(`/api/projects/${projectId}/reviews`);
+  return cachedGet(`GET:/api/projects/${projectId}/reviews`, () =>
+    http<ReviewItem[]>(`/api/projects/${projectId}/reviews`)
+  );
 }
 
 export async function submitReviewDecision(
@@ -390,6 +392,10 @@ export async function submitReviewDecision(
     }
     return item;
   }
+  // A decision changes attribute status, conflict/approval counts, and can
+  // touch sibling jobs — drop every cached view of this project and the list.
+  invalidateApi(`GET:/api/projects/${projectId}`);
+  invalidateApi("GET:/api/projects");
   return http<ReviewItem>(`/api/reviews/${reviewId}/decision`, {
     method: "POST",
     body: JSON.stringify({ projectId, ...decision }),
@@ -405,7 +411,18 @@ export async function listOutputs(projectId: string): Promise<OutputArtifact[]> 
     await simulateLatency();
     return state.outputs[projectId] ?? [];
   }
-  return http<OutputArtifact[]>(`/api/projects/${projectId}/outputs`);
+  return cachedGet(`GET:/api/projects/${projectId}/outputs`, () =>
+    http<OutputArtifact[]>(`/api/projects/${projectId}/outputs`)
+  );
+}
+
+/**
+ * Absolute URL for an artifact's bytes, or undefined when the QA gate blocked
+ * generation and no file exists.
+ */
+export function outputDownloadUrl(output: OutputArtifact): string | undefined {
+  if (!output.downloadUrl) return undefined;
+  return USE_MOCK ? undefined : `${API_BASE}${output.downloadUrl}`;
 }
 
 export async function generateOutput(
@@ -425,6 +442,10 @@ export async function generateOutput(
     state.outputs[projectId] = [...(state.outputs[projectId] ?? []), output];
     return output;
   }
+  // Generating re-derives the record and can flip the job's status, so drop
+  // every cached view of it.
+  invalidateApi(`GET:/api/projects/${projectId}`);
+  invalidateApi("GET:/api/projects");
   return http<OutputArtifact>(`/api/projects/${projectId}/outputs`, {
     method: "POST",
     body: JSON.stringify({ type }),

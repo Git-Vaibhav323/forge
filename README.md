@@ -72,6 +72,10 @@ This starts:
 | file-service | 8002 | File uploads + web sources + object storage |
 | question-service | 8003 | Completeness + one-question loop |
 | evidence-service | 8004 | PDF/web extraction → cited attributes |
+| review-service | 8005 | Conflict / high-risk holds, decisions, propagation |
+| relationship-service | 8006 | Variants, compatibility, BOM (internal — not proxied) |
+| vision-service | 8007 | Nameplate OCR (internal — not proxied; OCR off by default) |
+| generation-service | 8008 | Outputs, QA gate, artifact download |
 
 Verify:
 
@@ -98,7 +102,7 @@ npm run dev
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
-Open **http://localhost:3000**. Create a job with a file — it persists to Postgres (or Supabase) and object storage. Questions and **Evidence** (PDF + web sources) are live. Review is next (M5).
+Open **http://localhost:3000**. Create a job with a file — it persists to Postgres (or Supabase) and object storage. Questions, **Evidence** (PDF + web sources), and **Review** (conflicts + high-risk holds) are live. Outputs is next (M8).
 
 ---
 
@@ -136,7 +140,7 @@ Run `npm run dev` only — the UI uses seeded mock data from `lib/mock-data.ts`.
 
 ## What's live today
 
-**M1–M4 are done.** The next build is **M5 — review-service** (conflict / high-risk approval queue).
+**M1–M8 are done.** Every tab is live against the real backend.
 
 | Feature | Status |
 | --- | --- |
@@ -145,9 +149,63 @@ Run `npm run dev` only — the UI uses seeded mock data from `lib/mock-data.ts`.
 | Questions + completion score | ✅ Live API (M3) |
 | Evidence tab — PDF + cited fields | ✅ Live API (M4) |
 | Evidence tab — web page sources | ✅ Live API (**direct fetch** or paste HTML) |
-| Review, Outputs tabs | Mock / stub (M5–M8) |
+| Review tab — conflicts, high-risk holds, approvals | ✅ Live API (M5) |
+| Compatibility checks + BOM resolution | ✅ Live (M6 — internal, feeds Review) |
+| Nameplate photos as a cited source | ✅ Live (M7 — needs `OCR_PROVIDER`, off by default) |
+| Outputs tab — print + download, QA gate | ✅ Live API (M8) |
 
-Live frontend functions in `lib/api.ts`: `listProjects`, `getProject`, `createProject`, `deleteProject`, `uploadDocument`, `addWebSource`, `listQuestions`, `answerQuestion`, `listAttributes`, `extractAttributes`.
+Every function in `lib/api.ts` is live: `listProjects`, `getProject`, `createProject`, `deleteProject`, `uploadDocument`, `addWebSource`, `listQuestions`, `answerQuestion`, `listAttributes`, `extractAttributes`, `listReviewItems`, `submitReviewDecision`, `listOutputs`, `generateOutput`, `outputDownloadUrl`.
+
+### Review (M5)
+
+Two sources disagreeing on a field, or a safety-critical field with no
+evidence, becomes a **hold** on the Review tab. Nothing is auto-filled. A
+unit-only difference (285 PSI vs 19.65 bar) is normalized instead of asked
+about — but 285 PSI vs 287 PSI, and 24 VDC vs 24 VAC, stay holds.
+
+Decisions survive **Re-scan documents**: review items are keyed on
+(job, field), not on attribute ids, which evidence-service regenerates on every
+scan. Details: `backend/README.md` → **M5 — review-service**.
+
+### Compatibility and BOM (M6)
+
+Your answers on the Questions tab are the **requirement**; the datasheet's cited
+value is the **rating**. Deterministic rules compare them — a valve rated 285
+PSI on a 300 PSI duty becomes a hold reading *"Does not meet requirement"*.
+Rules that cannot be decided from the sources (chemical compatibility) abstain
+instead of guessing. Jobs sharing a manufacturer and model family are linked as
+variants, which is what bulk propagation now follows. No tab of its own — it
+feeds Review today and Outputs in M8. Details: `backend/README.md` → **M6**.
+
+### Nameplate photos (M7)
+
+Upload a photo of a nameplate and it becomes a cited source like any datasheet —
+**if** OCR is switched on. `OCR_PROVIDER` defaults to `off`, so the stack runs on
+a clean machine with no extra binaries; images are stored and simply read no
+facts rather than failing.
+
+A photo alone never produces a `known` fact — it lands as `unverified`, which
+makes a safety-critical field a hold. A photo that *agrees* with a datasheet
+confirms it; one that *disagrees* becomes a conflict naming both sources. OCR
+cleanup never repairs misread characters, because "fixing" `28S` to `285` would
+invent a rating. Details: `backend/README.md` → **M7**.
+
+### Printing (M8)
+
+**Print** on the Outputs tab writes a real markdown file to object storage and
+offers it for download. It is built only from values that are both publishable
+**and cited** — an attribute claiming to be known with nothing behind it is
+withheld.
+
+Two kinds of QA result, and the difference matters:
+
+- **Blocked** — sources still disagree, or a hold is unanswered. Nothing is
+  printed; the tab shows exactly what to fix and there is no file to download.
+- **Printed with caveats** — gaps, abstained checks, or photo-only values. The
+  document is produced, and every caveat is written *into* it under **Not
+  established** and **QA notes**, so the reader sees what the operator saw.
+
+Details: `backend/README.md` → **M8**.
 
 Hosted DB/files: set `POSTGRES_*` and `OBJECT_STORAGE_*` in `backend/.env` (see **Switch to Supabase** in `backend/README.md`). Local Docker Postgres/MinIO still works.
 
@@ -225,7 +283,9 @@ forge/
 │   └── api.ts           mock/live seam
 ├── backend/
 │   ├── gateway/         public API :8000
-│   ├── services/        project :8001, file :8002, question :8003, evidence :8004
+│   ├── services/        project :8001, file :8002, question :8003,
+│   │                    evidence :8004, review :8005, relationship :8006,
+│   │                    vision :8007, generation :8008
 │   ├── shared/          schemas + DB models
 │   └── README.md        backend details
 ├── plan.md              microservices build plan

@@ -43,12 +43,17 @@ The gateway preserves the **public API contract** (`/api/projects`, `/api/projec
 | **project-service (M1)** | ✅ `services/project_service/` on `:8001` — Postgres CRUD |
 | **file-service (M2)** | ✅ `services/file_service/` on `:8002` — MinIO uploads, SHA-256 dedup |
 | **question-service (M3)** | ✅ `services/question_service/` on `:8003` — required fields, one-question loop |
-| **shared/** | ✅ `shared/schemas.py` + `shared/db/` + `shared/completeness.py` |
-| Attributes, reviews, outputs | Stub routers in gateway (`backend/app/routers/`) — empty or `501` |
+| **evidence-service (M4)** | ✅ `services/evidence_service/` on `:8004` — cited attributes (PDF + web) |
+| **review-service (M5)** | ✅ `services/review_service/` on `:8005` — conflict / high-risk holds, decisions, propagation |
+| **relationship-service (M6)** | ✅ `services/relationship_service/` on `:8006` — variants, compatibility rules, BOM lines (internal, not proxied) |
+| **vision-service (M7)** | ✅ `services/vision_service/` on `:8007` — nameplate OCR via `shared/ocr.py`; OCR defaults off (internal, not proxied) |
+| **generation-service (M8)** | ✅ `services/generation_service/` on `:8008` — QA gate, markdown artifact, download |
+| **shared/** | ✅ `shared/schemas.py` + `shared/db/` + `shared/completeness.py` + `shared/risk.py` + `shared/normalization.py` + `shared/review_sync.py` |
+| Stub routers | ✅ **All removed.** Every public route is a gateway proxy. |
 | Postgres | ✅ Docker on host port **5433**, or **Supabase Postgres** via `DATABASE_URL` |
 | MinIO / S3 | ✅ Docker MinIO **or Supabase Storage (S3 API)** |
 | Redis, LLM | Not wired |
-| Automated tests | ✅ **8 passing** (`pytest` — unit + module) |
+| Automated tests | ✅ **181 passing** (`pytest` — unit + module) |
 
 ### Run the stack
 
@@ -276,73 +281,124 @@ Integrate in dependency order. Each row is one merge milestone — do not wire t
 
 ---
 
-### M5 — review-service
+### M5 — review-service ✅ DONE
 
 **Unlocks:** Review tab  
-**Calendar:** 2–3 weeks  
+**Service:** `services/review_service/` on `:8005`  
 **Depends on:** M4 (attributes to validate)
 
 | Work | Detail |
 | --- | --- |
-| Build | Pint normalization, conflict/risk detection, review tasks, decisions, bulk propagate, audit log |
-| Unit tests | Risk rules, bulk fingerprint matching, decision state machine |
-| Module tests | Seed conflicting attributes → review item → decision persists → attribute status updates |
-| Gateway | Proxy review routes |
-| Frontend | `listReviewItems`, `submitReviewDecision` |
+| Build | Pint normalization (`shared/normalization.py`), conflict/risk detection + decision replay (`shared/review_sync.py`), canonical risk list (`shared/risk.py`), `review_items` + `review_decisions` audit table, bulk propagate |
+| Unit tests | `test_normalization.py` — conversion vs value differences, AC≠DC, same-unit exactness, never raises |
+| Module tests | `test_reviews_api.py` — derivation, counters, all four decisions, audit trail, **survival across a re-scan**, sibling propagation |
+| Gateway | Proxies `GET /api/projects/{id}/reviews` + `POST /api/reviews/{rid}/decision` → :8005 |
+| Frontend | `listReviewItems`, `submitReviewDecision` live (now cached + invalidated) |
 
-**Done when:** Approve/edit/reject persists; print blocked while holds exist.
+**Done when:** Approve/edit/reject persists; print blocked while holds exist. ✅
+
+**Key design decision:** review items are keyed on **(project_id, field)**, not
+on the attribute id, because evidence-service deletes and recreates every
+attribute row on each re-scan. `run_extraction` replays settled decisions, so
+"Re-scan documents" no longer undoes human approvals.
+
+**Deferred:** bulk propagation matches siblings by (category, field, value)
+rather than a real relationship graph — upgrade in M6.
 
 ---
 
-### M6 — relationship-service
+### M6 — relationship-service ✅ DONE
 
 **Unlocks:** BOM / configuration jobs beyond flat fields  
-**Calendar:** 2 weeks  
+**Service:** `services/relationship_service/` on `:8006`  
 **Depends on:** M5 (mismatches become review items)
 
 | Work | Detail |
 | --- | --- |
-| Build | Variants, accessories, compatibility, BOM tables in Postgres |
-| Unit tests | Compatibility rules, BOM line resolution |
-| Module tests | Configuration job resolves parts; mismatch surfaces as review payload |
-| Gateway | No new public routes initially — called by generation-service |
+| Build | `product_relationships`, `compatibility_findings`, `bom_lines`; pure rule modules `shared/compatibility.py` + `shared/bom.py`; persistence in `shared/relationship_sync.py` |
+| Unit tests | `test_compatibility.py` (rules, cross-unit ordering, AC≠DC, abstention), `test_bom.py` (identity, named gaps, positions) |
+| Module tests | `test_relationships_api.py` — findings, variants, BOM, idempotence, **fail → review hold**, override clears without changing the value |
+| Gateway | **No public routes** — internal API, per the original plan |
 
-**Done when:** Configuration/BOM jobs resolve compatible parts; mismatches are review items, not silent merges.
+**Done when:** Configuration/BOM jobs resolve compatible parts; mismatches are review items, not silent merges. ✅
+
+**Key design decision:** the requirement side of every check is the user's
+Questions answer and the rating side is the datasheet's own cited value — both
+already on the record, so nothing new is invented to run a rule. A field still
+`conflicting` has no trustworthy rating, so its rules abstain until the conflict
+is resolved.
+
+**Deliberate abstention:** `chemical_compatibility` always returns `unknown`.
+Deciding whether a medium attacks a material needs a materials database this
+project does not have.
+
+**Also landed:** M5 bulk propagation now prefers the M6 variant graph and only
+falls back to "same category" when no relationships have been resolved.
 
 ---
 
-### M7 — vision-service
+### M7 — vision-service ✅ DONE
 
 **Unlocks:** Nameplate / image sources  
-**Calendar:** 2 weeks  
+**Service:** `services/vision_service/` on `:8007`  
 **Depends on:** M4 (same attribute contract)
 
 | Work | Detail |
 | --- | --- |
-| Build | Nameplate OCR, image-to-SKU, table reconstruction; write through evidence-service API or shared DB contract |
-| Unit tests | OCR post-processing, image source attribution |
-| Module tests | Image upload → attributes with `source` referencing image |
-| Gateway | Optional dedicated routes later; initially internal |
+| Build | `shared/ocr.py` provider abstraction (off / tesseract / custom) + meaning-preserving post-processing; images join the existing extraction pipeline |
+| Unit tests | `test_ocr.py` — cleanup, **never repairs misread characters**, provider selection, off reads nothing |
+| Module tests | `test_vision_api.py` — photo fills a field citing the image, photo agreeing confirms, photo disagreeing conflicts, photo-only critical field becomes a hold, OCR-off contributes nothing |
+| Gateway | **No public routes** — internal, as planned |
 
-**Done when:** Nameplate photo can fill or conflict with datasheet fields, citing the image.
+**Done when:** Nameplate photo can fill or conflict with datasheet fields, citing the image. ✅
+
+**Key design decision:** M7 added **no new tables and no new attribute path**.
+OCR just supplies text to the same `parse_page` rules a PDF goes through, so
+conflict detection, review holds and M6 compatibility work on nameplate data
+unchanged. evidence-service remains the only writer of attributes.
+
+**Trust rule:** a photo alone yields `unverified` (0.60), never `known`. Since
+`unverified` makes a safety-critical field a hold, a photo-only coil voltage
+reaches the reviewer. A photo agreeing with a datasheet lifts the field to
+`known` (0.95) like any other second source.
+
+**OCR defaults to OFF** and that is a supported configuration — no system
+binaries required to run the stack. Unread images are marked `pending`, not
+`processed`.
 
 ---
 
-### M8 — generation-service
+### M8 — generation-service ✅ DONE
 
 **Unlocks:** Outputs tab  
-**Calendar:** 2 weeks  
+**Service:** `services/generation_service/` on `:8008`  
 **Depends on:** M5 (approved facts only), M6 for BOM/configuration goals
 
 | Work | Detail |
 | --- | --- |
-| Build | Goal-specific templates, QA gate (cite + approve), artifact storage |
-| Unit tests | QA gate blocks unresolved conflicts; template field sourcing |
-| Module tests | Approved project → generate → artifact stored → list returns file metadata |
-| Gateway | Proxy output routes |
-| Frontend | `listOutputs`, `generateOutput` |
+| Build | `outputs` table, `shared/qa.py` gate, `shared/output_render.py` markdown templates, artifact bytes to object storage, download route |
+| Unit tests | `test_qa.py` (blockers vs warnings), `test_output_render.py` (sourcing, withheld table, table-injection safety) |
+| Module tests | `test_outputs_api.py` — generate, download as attachment, regenerate replaces, conflict blocks, hold blocks, uncited value never stated, BOM goals pull in M6 |
+| Gateway | Proxies `GET|POST /api/projects/{id}/outputs` + `GET /api/outputs/{id}/download` |
+| Frontend | `listOutputs`, `generateOutput` live; `outputDownloadUrl` wires the Download button |
 
-**Done when:** Print on Outputs tab writes a real file built only from approved, cited facts.
+**Done when:** Print on Outputs tab writes a real file built only from approved, cited facts. ✅
+
+**Key design decision:** a value is stated only when it is publishable **and
+cited**. Status alone is not enough — an attribute claiming `known` with no
+evidence behind it is withheld. Everything withheld appears in a **Not
+established** table with its reason, so an incomplete document cannot read as a
+complete one.
+
+**Blocked ≠ silent:** a QA-blocked print writes a `qa_failed` row listing the
+blockers, but no file (`/download` → 409).
+
+**Format:** markdown, chosen so the artifact needs no rendering dependency.
+Swapping in PDF later touches `shared/output_render.py` only.
+
+**Cleanup landed with M8:** the deprecated `app/main.py`, `app/routers/`,
+`app/db/` and `app/models/` are deleted. `app/config.py` stays — it is the
+shared settings module every service imports.
 
 ---
 
@@ -356,8 +412,8 @@ When a service is merged and module tests pass, change only the matching functio
 | M2 | `uploadDocument` | ✅ live |
 | M3 | `listQuestions`, `answerQuestion` | ✅ live |
 | M4 | `listAttributes`, `extractAttributes` | ✅ live |
-| M5 | `listReviewItems`, `submitReviewDecision` | mock |
-| M8 | `listOutputs`, `generateOutput` | mock |
+| M5 | `listReviewItems`, `submitReviewDecision` | ✅ live |
+| M8 | `listOutputs`, `generateOutput`, `outputDownloadUrl` | ✅ live |
 
 Set when M1 is live:
 
@@ -375,6 +431,11 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 | **project-service** | `:8001` | ✅ |
 | **file-service** | `:8002` | ✅ |
 | **question-service** | `:8003` | ✅ |
+| **evidence-service** | `:8004` | ✅ |
+| **review-service** | `:8005` | ✅ |
+| **relationship-service** | `:8006` (internal) | ✅ |
+| **vision-service** | `:8007` (internal) | ✅ |
+| **generation-service** | `:8008` | ✅ |
 | **PostgreSQL** | Host port **5433** → container 5432 | ✅ |
 | **MinIO** | `:9000` API, `:9001` console | ✅ |
 | **pgvector** | evidence-service embeddings | deferred (M4 ships key-free) |
@@ -393,14 +454,25 @@ docker compose up -d    # starts postgres + minio
 
 ## Order of work next
 
-M1–M3 are merged. Next:
+**M1–M8 are merged.** The build plan is complete: every tab is live and every
+public route is a gateway proxy.
 
-1. Extract **evidence-service** to `services/evidence_service/` on `:8004`
-2. PDF/OCR → cited chunks → attributes (never invent a value)
-3. Unit + module tests before gateway merge
-4. Flip `listAttributes` in `lib/api.ts`
+Remaining verification (not new features):
 
-Do **not** start review (M5) until evidence can produce real fields and conflicts.
+1. Apply migrations `006`–`008` against real Postgres — they have only run
+   against SQLite via the test suite
+2. Manual end-to-end pass: create → upload → questions → evidence → resolve a
+   hold → print → download
+3. Environment: the repo documents Python **3.12+**; development has been on
+   **3.11.9**
+
+Deferred upgrades, none blocking:
+
+- PDF/DOCX artifacts (swap the writer in `shared/output_render.py`)
+- Real relationship graph for variants, replacing (category, field, value)
+- pgvector/embeddings for semantic retrieval in evidence-service
+- Apify provider for JS-heavy web pages (`_fetch_apify` is still a stub)
+- Redis / LangGraph orchestration
 
 ---
 
