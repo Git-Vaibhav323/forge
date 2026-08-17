@@ -14,6 +14,19 @@ def test_product_configuration_asks_fail_safe_and_voltage() -> None:
     assert "operating_medium" in fields
 
 
+def test_replacement_goal_skips_common_catalog_fields() -> None:
+    fields = {spec.field for spec in required_fields("replacement_recommendation", "TECHSTACK")}
+    assert fields == {"existing_part_number", "reason_for_replacement"}
+
+
+def test_rfq_goal_skips_common_catalog_fields() -> None:
+    fields = {spec.field for spec in required_fields("rfq_response", "valve")}
+    assert "model" not in fields
+    assert "manufacturer" not in fields
+    assert "customer_requirement" in fields
+    assert "quantity" in fields
+
+
 def test_sensor_category_adds_range() -> None:
     fields = {spec.field for spec in required_fields("rfq_response", "temperature_sensor")}
     assert "measurement_range" in fields
@@ -24,6 +37,7 @@ def test_i_dont_know_is_not_satisfied() -> None:
     assert is_satisfied("Water") is True
     assert is_satisfied("Not applicable") is True
     assert is_satisfied("I don't know") is False
+    assert is_satisfied("idk") is False
     assert is_satisfied("") is False
     assert is_satisfied(None) is False
 

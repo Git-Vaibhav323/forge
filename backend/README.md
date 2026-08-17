@@ -207,7 +207,7 @@ Copy from `.env.example`. Required for M1–M3:
 
 ---
 
-## M3 — Completeness / questions ✅ DONE
+## M3 — Completeness / questions ✅ DONE (hybrid engine)
 
 **Service:** `services/question_service/` on **:8003**
 
@@ -216,7 +216,25 @@ Copy from `.env.example`. Required for M1–M3:
 | `GET` | `/api/projects/{id}/questions` | ✅ |
 | `POST` | `/api/projects/{id}/questions/{qid}/answer` | ✅ |
 
-Required fields come from the job **goal + category**. One open question at a time. `"Not applicable"` completes a field; `"I don't know"` does not. Answers persist in `questions`; `completionScore` / `blockingFieldsCount` update on the job.
+**Hybrid question selection** (`shared/question_engine.py`):
+
+1. **Goal + category schema** — base required fields (`shared/completeness.py`)
+2. **Conditional rules** — extra fields when answers match (e.g. Hazardous area → area class)
+3. **Evidence pre-fill** — `known`/`verified` attributes from M4 skip those questions
+4. **Optional LLM ranker** — picks which gap to ask first (falls back to priority sort)
+
+One open question at a time. `"Not applicable"` completes a field; `"I don't know"` / `"idk"` do not.
+User answers override evidence. Answers persist in `questions`; `completionScore` updates on the job.
+
+**Free LLM (optional)** — add to `backend/.env`:
+
+| Provider | Get key | Env |
+| --- | --- | --- |
+| **Google Gemini** (recommended) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | `LLM_PROVIDER=gemini`, `LLM_API_KEY=...`, `LLM_MODEL=gemini-2.0-flash` |
+| **Groq** (alternative) | [console.groq.com](https://console.groq.com/) | `LLM_PROVIDER=groq`, `LLM_API_KEY=...`, `LLM_MODEL=llama-3.1-8b-instant` |
+| **Off** (rules only) | — | `LLM_PROVIDER=off` |
+
+Without a key, layers 1–3 still work; layer 4 uses critical → high priority ordering.
 
 ---
 

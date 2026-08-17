@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 
 PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-UNSATISFIED = {"", "i don't know", "i dont know", "unknown"}
+UNSATISFIED = {"", "i don't know", "i dont know", "unknown", "idk"}
 
 
 @dataclass(frozen=True)
@@ -207,6 +207,18 @@ GOAL_FIELDS: dict[str, tuple[RequiredField, ...]] = {
     ),
 }
 
+# Goals that ask only goal-specific (+ category) fields — not the COMMON catalog block.
+# Product configuration / BOM jobs still merge manufacturer, model, medium, etc.
+GOAL_ONLY: frozenset[str] = frozenset(
+    {
+        "replacement_recommendation",
+        "rfq_response",
+        "technical_quotation",
+        "product_datasheet",
+        "installation_package",
+    }
+)
+
 CATEGORY_FIELDS: tuple[tuple[str, RequiredField], ...] = (
     (
         "valve",
@@ -232,12 +244,13 @@ CATEGORY_FIELDS: tuple[tuple[str, RequiredField], ...] = (
 
 
 def required_fields(goal: str, category: str = "") -> list[RequiredField]:
-    """Merge common + goal + category extras; first definition of a field wins."""
+    """Merge goal (+ optional COMMON) + category extras."""
     merged: dict[str, RequiredField] = {}
-    for spec in COMMON:
-        merged[spec.field] = spec
+    if goal not in GOAL_ONLY:
+        for spec in COMMON:
+            merged[spec.field] = spec
     for spec in GOAL_FIELDS.get(goal, ()):
-        merged.setdefault(spec.field, spec)
+        merged[spec.field] = spec
     haystack = (category or "").lower().replace("-", " ").replace("_", " ")
     for needle, spec in CATEGORY_FIELDS:
         if needle in haystack:
@@ -272,11 +285,24 @@ def score_answers(
     return round(100 * completed / len(specs)), blocking
 
 
+def goal_field_names(goal: str) -> frozenset[str]:
+    return frozenset(spec.field for spec in GOAL_FIELDS.get(goal, ()))
+
+
 def next_unsatisfied(
-    specs: list[RequiredField], answers: dict[str, str]
+    specs: list[RequiredField],
+    answers: dict[str, str],
+    *,
+    goal: str = "",
 ) -> RequiredField | None:
     missing = [spec for spec in specs if not is_satisfied(answers.get(spec.field))]
-    missing.sort(key=lambda spec: PRIORITY_ORDER.get(spec.priority, 9))
+    goal_first = goal_field_names(goal)
+    missing.sort(
+        key=lambda spec: (
+            0 if spec.field in goal_first else 1,
+            PRIORITY_ORDER.get(spec.priority, 9),
+        )
+    )
     return missing[0] if missing else None
 
 

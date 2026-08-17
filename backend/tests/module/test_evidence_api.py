@@ -74,12 +74,14 @@ def _stub_pdf_reader(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_attributes_empty_before_extract(
+def test_attributes_schema_before_extract(
     evidence_client: TestClient, db_session: Session
 ) -> None:
     project_id = _seed(db_session)
     body = evidence_client.get(f"/api/projects/{project_id}/attributes").json()
-    assert body == []
+    assert len(body) >= 1
+    assert all(a["status"] == "missing" for a in body)
+    assert all(a["rawValue"] == "" for a in body)
 
 
 def test_extract_cites_fields_and_flags_conflict(

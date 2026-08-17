@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     postgres_password: str | None = None
     postgres_sslmode: str = "require"
 
+    # Hybrid question engine — optional LLM ranking (free tier: Gemini or Groq).
+    # LLM_PROVIDER=off disables LLM; rules + evidence still apply.
+    llm_provider: str = "off"
+    llm_api_key: str | None = None
+    llm_model: str | None = None
+
     @model_validator(mode="after")
     def apply_supabase_parts(self):
         if self.postgres_host and self.postgres_password:

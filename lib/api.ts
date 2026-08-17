@@ -253,6 +253,7 @@ export async function extractAttributes(projectId: string): Promise<Attribute[]>
     return state.attributes[projectId] ?? [];
   }
   invalidateApi(`GET:/api/projects/${projectId}`);
+  invalidateApi(`GET:/api/projects/${projectId}/questions`);
   return http<Attribute[]>(`/api/projects/${projectId}/attributes/extract`, {
     method: "POST",
   });
