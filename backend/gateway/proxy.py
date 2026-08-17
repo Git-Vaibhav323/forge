@@ -53,6 +53,31 @@ async def proxy_project_attributes_extract(project_id: str, request: Request) ->
     return await _forward(request, settings.evidence_service_url, timeout=120.0)
 
 
+@router.api_route("/api/projects/{project_id}/reviews", methods=["GET", "OPTIONS"])
+async def proxy_project_reviews(project_id: str, request: Request) -> Response:
+    # Derives the queue from the current record before returning it.
+    return await _forward(request, settings.review_service_url, timeout=60.0)
+
+
+@router.api_route("/api/reviews/{review_id}/decision", methods=["POST", "OPTIONS"])
+async def proxy_review_decision(review_id: str, request: Request) -> Response:
+    # A propagated decision can touch sibling jobs; allow a wider budget.
+    return await _forward(request, settings.review_service_url, timeout=60.0)
+
+
+@router.api_route(
+    "/api/projects/{project_id}/outputs", methods=["GET", "POST", "OPTIONS"]
+)
+async def proxy_project_outputs(project_id: str, request: Request) -> Response:
+    # Generating re-derives the whole record before the QA gate runs.
+    return await _forward(request, settings.generation_service_url, timeout=120.0)
+
+
+@router.api_route("/api/outputs/{output_id}/download", methods=["GET", "OPTIONS"])
+async def proxy_output_download(output_id: str, request: Request) -> Response:
+    return await _forward(request, settings.generation_service_url, timeout=60.0)
+
+
 @router.api_route(
     "/api/projects/{project_id}/questions/{question_id}/answer",
     methods=["POST", "OPTIONS"],
@@ -86,8 +111,16 @@ async def _forward(request: Request, upstream_base: str, timeout: float = 15.0) 
         timeout=timeout,
     )
 
+    # Content-Disposition must survive the hop or a download arrives unnamed
+    # and renders inline instead of saving (M8).
+    passthrough = {}
+    disposition = upstream.headers.get("content-disposition")
+    if disposition:
+        passthrough["content-disposition"] = disposition
+
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,
         media_type=upstream.headers.get("content-type"),
+        headers=passthrough or None,
     )

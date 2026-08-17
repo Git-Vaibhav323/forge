@@ -87,6 +87,18 @@ class Attribute(BaseModel):
         populate_by_name = True
 
 
+class ConflictValue(BaseModel):
+    """One side of a disagreement, as rendered by ReviewItemCard."""
+
+    value: str
+    source: str
+    source_type: str = Field(alias="sourceType")
+    evidence_id: Optional[str] = Field(default=None, alias="evidenceId")
+
+    class Config:
+        populate_by_name = True
+
+
 class ReviewItem(BaseModel):
     id: str
     project_id: str = Field(alias="projectId")
@@ -96,6 +108,8 @@ class ReviewItem(BaseModel):
     severity: Severity
     current_value: Optional[str] = Field(default=None, alias="currentValue")
     proposed_value: Optional[str] = Field(default=None, alias="proposedValue")
+    # Populated for `conflict` items — each disagreeing source with its quote.
+    values: Optional[list[ConflictValue]] = None
     reason: str
     evidence_ids: list[str] = Field(default_factory=list, alias="evidenceIds")
     affected_products: Optional[int] = Field(default=None, alias="affectedProducts")
@@ -110,6 +124,97 @@ class ReviewDecision(BaseModel):
     action: str  # approve | edit | reject | unresolved
     value: Optional[str] = None
     propagate: bool = False
+    # The frontend posts projectId alongside the decision (lib/api.ts).
+    project_id: Optional[str] = Field(default=None, alias="projectId")
+
+    class Config:
+        populate_by_name = True
+
+
+class ProductRelationship(BaseModel):
+    """A derived link to a sibling job, with the reason it was drawn (M6)."""
+
+    id: str
+    project_id: str = Field(alias="projectId")
+    related_project_id: str = Field(alias="relatedProjectId")
+    relation: str  # variant | accessory | duplicate
+    basis: str
+    confidence: float
+
+    class Config:
+        populate_by_name = True
+
+
+class CompatibilityFinding(BaseModel):
+    """One deterministic rule result. `unknown` means the rule abstained (M6)."""
+
+    id: str
+    project_id: str = Field(alias="projectId")
+    rule: str
+    field: str
+    status: str  # pass | fail | unknown
+    severity: Severity
+    required_value: Optional[str] = Field(default=None, alias="requiredValue")
+    rated_value: Optional[str] = Field(default=None, alias="ratedValue")
+    reason: str
+    evidence_ids: list[str] = Field(default_factory=list, alias="evidenceIds")
+
+    class Config:
+        populate_by_name = True
+
+
+class BomLine(BaseModel):
+    """One line of a resolved BOM. `missing` lines are named, not dropped (M6)."""
+
+    id: str
+    project_id: str = Field(alias="projectId")
+    position: int
+    role: str  # primary | specification
+    component: str
+    quantity: Optional[str] = None
+    unit: Optional[str] = None
+    status: str  # resolved | missing | unverified
+    source_field: Optional[str] = Field(default=None, alias="sourceField")
+    reason: str
+    evidence_ids: list[str] = Field(default_factory=list, alias="evidenceIds")
+
+    class Config:
+        populate_by_name = True
+
+
+class RelationshipView(BaseModel):
+    """What relationship-service returns for a job (M6, consumed by M8)."""
+
+    variants: list[ProductRelationship] = []
+    findings: list[CompatibilityFinding] = []
+    bom_lines: list[BomLine] = Field(default_factory=list, alias="bomLines")
+
+    class Config:
+        populate_by_name = True
+
+
+class VisionStatus(BaseModel):
+    """Whether OCR is available at all, and under which provider (M7)."""
+
+    provider: str  # off | tesseract | custom
+    enabled: bool
+    image_types: list[str] = Field(default_factory=list, alias="imageTypes")
+
+    class Config:
+        populate_by_name = True
+
+
+class ImageRead(BaseModel):
+    """Raw text read off one stored image. Facts are never written from here (M7)."""
+
+    document_id: str = Field(alias="documentId")
+    filename: str
+    provider: str
+    pages: list[str] = []
+    note: str = ""
+
+    class Config:
+        populate_by_name = True
 
 
 class Question(BaseModel):
@@ -179,6 +284,10 @@ class OutputArtifact(BaseModel):
     status: str = "draft"  # draft | generated | qa_passed | qa_failed
     generated_at: Optional[datetime] = Field(default=None, alias="generatedAt")
     qa_notes: Optional[list[str]] = Field(default=None, alias="qaNotes")
+    # Gateway-relative path; null when the QA gate blocked generation and no
+    # file was written (M8). The frontend prefixes NEXT_PUBLIC_API_BASE_URL.
+    download_url: Optional[str] = Field(default=None, alias="downloadUrl")
+    size_bytes: Optional[int] = Field(default=None, alias="sizeBytes")
 
     class Config:
         populate_by_name = True

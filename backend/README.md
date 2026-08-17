@@ -8,8 +8,18 @@ Frontend → gateway :8000 → project-service  :8001  (jobs CRUD)
                          → file-service     :8002  (uploads + MinIO)
                          → question-service :8003  (completeness loop)
                          → evidence-service :8004  (cited attributes / evidence)
-                         → stub routers              (reviews, outputs, …)
+                         → review-service   :8005  (conflict / high-risk holds)
+                         → generation-service :8008 (outputs + QA gate + download)
+
+relationship-service :8006  (variants, compatibility, BOM) — internal only,
+                             not proxied; called by generation-service (M8)
+vision-service       :8007  (nameplate OCR inspection) — internal only;
+                             evidence-service reads images via shared/ocr.py
 ```
+
+Every public route is a proxy. There are **no stub routers left** — the
+deprecated `app/main.py` monolith and `app/routers/` were removed in M8.
+`app/config.py` remains: it is the shared settings module every service imports.
 
 ---
 
@@ -103,6 +113,10 @@ uvicorn services.project_service.main:app --reload --port 8001
 uvicorn services.file_service.main:app --reload --port 8002
 uvicorn services.question_service.main:app --reload --port 8003
 uvicorn services.evidence_service.main:app --reload --port 8004
+uvicorn services.review_service.main:app --reload --port 8005
+uvicorn services.relationship_service.main:app --reload --port 8006
+uvicorn services.vision_service.main:app --reload --port 8007
+uvicorn services.generation_service.main:app --reload --port 8008
 uvicorn gateway.main:app --reload --port 8000
 ```
 
@@ -114,6 +128,10 @@ curl http://127.0.0.1:8001/health
 curl http://127.0.0.1:8002/health
 curl http://127.0.0.1:8003/health
 curl http://127.0.0.1:8004/health
+curl http://127.0.0.1:8005/health
+curl http://127.0.0.1:8006/health
+curl http://127.0.0.1:8007/health
+curl http://127.0.0.1:8008/health
 curl http://127.0.0.1:8000/api/projects
 ```
 
@@ -331,6 +349,294 @@ get HTTP 501 on URL-only ingest.
 
 ---
 
+## M5 — review-service ✅ DONE
+
+**Service:** `services/review_service/` on **:8005**. Powers the **Review** tab.
+
+| Method | Path | Status |
+| --- | --- | --- |
+| `GET` | `/api/projects/{id}/reviews` | ✅ derives + returns the queue |
+| `POST` | `/api/reviews/{rid}/decision` | ✅ approve / edit / reject / unresolved |
+
+### What becomes a hold
+
+| Condition | Issue type | Severity |
+| --- | --- | --- |
+| Two sources disagree on one field | `conflict` | field risk, min `high` |
+| Safety-critical field with no evidence | `high_risk` | field risk, min `high` |
+| Unit-only disagreement (285 PSI vs 19.65 bar) | **none** — normalized automatically | — |
+
+Safety-critical fields are listed once in `shared/risk.py`: pressure, voltage,
+temperature, connection standard, hazardous-area class, chemical compatibility.
+
+### Decisions
+
+| Action | Effect on the record |
+| --- | --- |
+| `approve` | Writes the shown value (or your typed one) → attribute `verified` |
+| `approve` with nothing proposed | Explicit override — clears the hold **without inventing a value** |
+| `edit` | Writes the value you typed → attribute `verified` |
+| `reject` | Clears the value → attribute `missing`. Nothing is kept that nobody stands behind. On a safety-critical field this correctly reopens as a `high_risk` "no evidence" hold. |
+| `unresolved` | Parks it; still counted as pending |
+
+Every decision is appended to `review_decisions` (never updated, never deleted).
+
+### Why decisions survive "Re-scan documents"
+
+evidence-service rebuilds **every** attribute row on each extract, with fresh
+ids. Review items are therefore keyed on **(project_id, field)**, not on the
+attribute id, and `run_extraction` replays settled decisions through
+`shared/review_sync.py`. A re-scan re-reads the PDFs, finds the same
+disagreement, and still shows the field as approved.
+
+A decided item only re-opens when the underlying disagreement actually changes
+(tracked by `signature`), so a re-scan never nags about a settled question.
+
+### Unit normalization (Pint)
+
+`shared/normalization.py` decides whether two values are the same fact written
+two ways. Rules that matter:
+
+- Different units → converted, with 0.5% slack for published rounding.
+- **Same** unit → exact match required (285 PSI ≠ 287 PSI).
+- **24 VDC ≠ 24 VAC** — Pint sees only volts, so current type is compared
+  separately. On a critical field that must stay a hold.
+- Anything unparseable falls back to string comparison; nothing ever raises.
+
+### Bulk propagation
+
+When other jobs **in the same category** carry the same wrong value for the
+same field, the item reports `affectedProducts`. Approving with
+`propagate: true` applies your correction to those siblings too. Without the
+flag they are untouched. This is a deliberate stand-in until M6 provides a real
+relationship graph.
+
+### Counters
+
+`shared/review_sync.recompute_counts` is the **single writer** of
+`conflictsCount` and `pendingApprovalsCount`. Both the Review tab badge and the
+Outputs print gate read them, so they are derived in one place rather than by
+each service that happens to touch attributes.
+
+### How to test M5
+
+```bash
+python -m pytest tests/unit/test_normalization.py tests/module/test_reviews_api.py -q
+```
+
+---
+
+## M6 — relationship-service ✅ DONE
+
+**Service:** `services/relationship_service/` on **:8006**. **Internal** — the
+gateway does not proxy it and no frontend tab calls it. generation-service (M8)
+is the intended consumer.
+
+| Method | Path | Status |
+| --- | --- | --- |
+| `GET` | `/api/projects/{id}/relationships` | ✅ returns stored state |
+| `POST` | `/api/projects/{id}/relationships/resolve` | ✅ re-derives everything |
+
+It is also re-run automatically inside `run_extraction`, so a document re-scan
+refreshes variants, findings and BOM lines along with the attributes.
+
+### Where the two sides of a compatibility check come from
+
+Both already exist on the record, and both are cited:
+
+| Side | Source | Stored as |
+| --- | --- | --- |
+| **Requirement** — what you asked for | Questions tab answer | the attribute value + a `user-answer` evidence row |
+| **Rating** — what the datasheet says | extracted document | document evidence rows, each with its own `value` (M5) |
+
+A field that is still `conflicting` has **no** trustworthy rating, so every rule
+over it abstains. You cannot check a number nobody has agreed on yet — the
+conflict is the hold, and the compatibility check runs once it clears.
+
+### Rules (`shared/compatibility.py`)
+
+| Rule | Field | Test | Severity |
+| --- | --- | --- | --- |
+| `pressure_rating` | `maximum_pressure` | rating ≥ requirement | critical |
+| `temperature_rating` | `max_temperature` | rating ≥ requirement | high |
+| `supply_voltage_match` | `supply_voltage` | exact (AC ≠ DC) | critical |
+| `connection_match` | `connection_standard` | exact | high |
+| `chemical_compatibility` | `operating_medium` | **always abstains** | critical |
+
+Three outcomes: `pass`, `fail`, `unknown`. **`unknown` is a first-class result** —
+it means the rule refused to guess (a side is missing, the quantities are not
+comparable, or there is no knowledge base behind the question). Only `fail`
+becomes a hold; `unknown` is recorded as a visible gap and never blocks.
+
+`chemical_compatibility` abstains by design: deciding whether a medium attacks a
+material needs a materials database this project does not have, and guessing it
+would be exactly the invention the whole system exists to prevent.
+
+### Failures become review holds
+
+A `fail` finding is turned into a review item with issue type `incompatible`
+("Does not meet requirement"). Approving one is an **explicit override** — it
+clears the hold and does not change the value, because there is no new fact to
+record. See `shared/review_sync.py`.
+
+### Variants
+
+Two jobs are linked when they share a manufacturer **and** a model family
+(`MFC-GV-100` and `MFC-GV-150` → family `MFC-GV`). Every link records the
+`basis` that produced it, so a propagated correction can be explained rather
+than trusted. M5 bulk propagation now prefers these links and only falls back
+to "same category" when no relationships have been resolved.
+
+### BOM lines
+
+Built only for `bom_generation` and `product_configuration` goals, from cited
+attributes. Anything the goal wants but nothing supports becomes a `missing`
+line rather than being dropped — a BOM that silently omits what it could not
+resolve is worse than one that names the gap.
+
+### How to test M6
+
+```bash
+python -m pytest tests/unit/test_compatibility.py tests/unit/test_bom.py \
+  tests/module/test_relationships_api.py -q
+```
+
+---
+
+## M7 — vision-service ✅ DONE
+
+**Service:** `services/vision_service/` on **:8007**. **Internal** — not proxied.
+Images are read during normal extraction; these routes exist to see what OCR saw,
+which is the only practical way to debug a bad nameplate read.
+
+| Method | Path | Status |
+| --- | --- | --- |
+| `GET` | `/api/vision/status` | ✅ which provider is active |
+| `GET` | `/api/projects/{id}/images` | ✅ image documents on the job |
+| `POST` | `/api/projects/{id}/images/{doc_id}/read` | ✅ OCR one image, returns text only |
+
+### OCR is off by default — and that is a real answer
+
+| `OCR_PROVIDER` | Needs | Behaviour |
+| --- | --- | --- |
+| `off` (**default**) | nothing | Images are stored and listed, and read **no facts**. |
+| `tesseract` | tesseract binary + `pip install pytesseract pillow` | Local OCR |
+| `custom` | `OCR_API_URL` (+ optional `OCR_API_KEY`) | POSTs the image; expects `{"text"}` or `{"pages"}` |
+
+Running with no OCR is a **supported configuration, not a failure**. The stack
+boots on a clean machine with no system binaries; an unread image produces
+silence, and silence produces `missing` — never a guess. Unread images are
+marked `pending`, not `processed`, so the UI does not claim they were read.
+
+### A photo is not a datasheet
+
+| Evidence for a field | Status | Confidence |
+| --- | --- | --- |
+| Image only | **`unverified`** | 0.60 |
+| Image + document that agree | `known` | 0.95 |
+| Image + document that disagree | `conflicting` | 0.50 |
+
+A single OCR read is a *reading*, not an established fact — so it never lands as
+`known`. Because `unverified` is one of the statuses that makes a safety-critical
+field a hold (M5), a photo-only coil voltage reaches the reviewer instead of the
+record. A photo that **agrees** with a datasheet is a genuine second source and
+lifts the field like any other agreement.
+
+### Why post-processing never repairs characters
+
+OCR confuses `O`/`0`, `I`/`1`, `S`/`5`. "Correcting" those inside a value would
+fabricate a rating nobody can cite — turning a blurry `28S PSI` into `285 PSI`
+invents a pressure. `shared/ocr.clean_text` therefore only makes changes that
+**cannot alter meaning**: whitespace, control characters, unicode punctuation,
+and hyphen-broken line joins. A misread stays misread, shown next to the photo
+it came from.
+
+One subtlety worth keeping: punctuation is mapped **before** NFKC normalization,
+because NFKC decomposes `″` into two apostrophes and would destroy the inch
+symbol that the `nominal_size` rule matches on.
+
+### Architecture note
+
+Images join the **existing** pipeline rather than getting their own. OCR simply
+supplies text to the same `parse_page` label→field rules a PDF goes through, so
+conflict detection, review holds, and M6 compatibility all work on nameplate
+data with no changes. Attributes are still written by exactly one service
+(evidence-service), which is what stops a photo taking a different path onto the
+record than a datasheet does.
+
+### How to test M7
+
+```bash
+python -m pytest tests/unit/test_ocr.py tests/module/test_vision_api.py -q
+```
+
+---
+
+## M8 — generation-service ✅ DONE
+
+**Service:** `services/generation_service/` on **:8008**. Powers the **Outputs** tab.
+
+| Method | Path | Status |
+| --- | --- | --- |
+| `GET` | `/api/projects/{id}/outputs` | ✅ |
+| `POST` | `/api/projects/{id}/outputs` | ✅ runs the QA gate, then prints |
+| `GET` | `/api/outputs/{id}/download` | ✅ serves the artifact as an attachment |
+
+### The QA gate
+
+`shared/qa.py` separates two questions, and the split is the whole design:
+
+| | Meaning | Effect |
+| --- | --- | --- |
+| **Blocker** | Two sources still disagree, or a hold is unanswered | **Nothing is printed.** No file is written. |
+| **Warning** | A gap, an abstained rule, a photo-only value, an unresolved BOM line | Printed, and the caveat is **written into the document** |
+
+A blocked print still records a row with `status=qa_failed` and the blocking
+reasons, so the Outputs tab says exactly what to fix — but `storage_key` stays
+null and `/download` returns **409**. There is no file because there was nothing
+legitimate to write.
+
+Resulting status: `qa_failed` (blocked) → `generated` (printed with caveats) →
+`qa_passed` (printed clean).
+
+### What actually reaches the page
+
+A value is stated as fact only when it is **publishable AND cited**:
+
+```
+status in {known, verified, derived}  AND  raw_value non-empty  AND  has evidence
+```
+
+Status alone is not enough — an attribute claiming `known` with nothing behind
+it is withheld. Everything withheld appears in a **Not established** table with
+the reason. That table is the point: a datasheet that silently omits the field
+it could not source reads as complete when it is not.
+
+### The artifact
+
+Markdown (`text/markdown`), rendered by `shared/output_render.py`. Chosen so a
+cited document is readable, diffable, and needs **no rendering dependency** —
+no reportlab, no python-docx. Swapping the writer for PDF later touches that one
+module; everything above it works in `RenderContext`.
+
+Sections: header → **Established** (value + confidence + document/page) →
+**Not established** (field + status + why) → **Bill of materials** (BOM goals,
+via M6) → **Compatibility** (M6, with `unknown` explicitly marked *not a pass*)
+→ **QA notes**.
+
+Artifacts are stored in object storage under `{project}/outputs/{id}/{filename}`,
+reusing `file_service/storage.py`. One artifact per `(job, type)` — regenerating
+replaces the previous file rather than piling up copies.
+
+### How to test M8
+
+```bash
+python -m pytest tests/unit/test_qa.py tests/unit/test_output_render.py \
+  tests/module/test_outputs_api.py -q
+```
+
+---
+
 ## Switch to Supabase (Postgres + Storage)
 
 Local Docker Postgres/MinIO still works. To use a hosted Supabase project instead:
@@ -449,7 +755,7 @@ source .venv/bin/activate
 pytest
 ```
 
-21 tests — unit + module. Module tests use SQLite in-memory by default (object storage mocked).
+181 tests — unit + module. Module tests use SQLite in-memory by default (object storage and OCR mocked).
 
 Postgres-backed (optional):
 
@@ -469,12 +775,18 @@ backend/
 │   ├── project_service/        :8001 — job CRUD
 │   ├── file_service/           :8002 — uploads, web sources, S3/MinIO
 │   ├── question_service/       :8003 — completeness loop
-│   └── evidence_service/       :8004 — cited attributes (PDF + web)
-├── alembic/                    001–005 (projects, documents+source_url, questions, attributes)
+│   ├── evidence_service/       :8004 — cited attributes (PDF + web)
+│   ├── review_service/         :8005 — conflict / high-risk approval queue
+│   ├── relationship_service/   :8006 — variants, compatibility, BOM (internal)
+│   ├── vision_service/         :8007 — nameplate OCR inspection (internal)
+│   └── generation_service/     :8008 — outputs, QA gate, download
+├── alembic/                    001–008 (projects, documents+source_url, questions,
+│                               attributes, reviews, relationships, outputs)
+│                               M7 added no tables — images reuse `documents`
 ├── docker-compose.yml          Postgres (:5433) + MinIO (:9000)
-├── scripts/run-dev.sh          start gateway + all services (:8001–:8004)
+├── scripts/run-dev.sh          start gateway + all services (:8001–:8008)
 ├── scripts/run-dev.ps1         same on Windows PowerShell
-└── app/routers/                stub routers (attributes, reviews, outputs)
+└── app/config.py               shared settings (all that remains of the monolith)
 ```
 
 ---
@@ -493,9 +805,14 @@ backend/
 | POST | `/api/projects/{id}/attributes/extract` | ✅ M4 |
 | GET | `/api/projects/{id}/questions` | ✅ M3 |
 | POST | `/api/projects/{id}/questions/{qid}/answer` | ✅ M3 |
-| GET | `/api/projects/{id}/reviews` | ⏳ M5 |
-| POST | `/api/reviews/{rid}/decision` | ⏳ M5 |
-| GET | `/api/projects/{id}/outputs` | ⏳ M8 |
-| POST | `/api/projects/{id}/outputs` | ⏳ M8 |
+| GET | `/api/projects/{id}/reviews` | ✅ M5 |
+| POST | `/api/reviews/{rid}/decision` | ✅ M5 |
+| GET | `/api/projects/{id}/outputs` | ✅ M8 |
+| POST | `/api/projects/{id}/outputs` | ✅ M8 |
+| GET | `/api/outputs/{id}/download` | ✅ M8 |
 
-Next: **M5 — review-service** (conflict/high-risk queue). See `plan.md`.
+Internal (not proxied):
+- `GET|POST /api/projects/{id}/relationships[/resolve]` on :8006 — ✅ M6
+- `GET /api/vision/status`, `GET /api/projects/{id}/images`, `POST /api/projects/{id}/images/{doc}/read` on :8007 — ✅ M7
+
+**M1–M8 are complete.** The public contract in `context.md` is fully live.

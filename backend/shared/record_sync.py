@@ -12,20 +12,10 @@ from shared.completeness import COMMON, is_satisfied
 from shared.db.models import AttributeEvidenceRow, AttributeRow, ProjectRow, QuestionRow
 from shared.evidence_fields import DOCUMENT_EXTRACT_GOALS, allowed_evidence_fields, question_field_names
 from shared.question_engine import active_specs, build_job_context, list_question_rows
+from shared.risk import HIGH_RISK_FIELDS  # noqa: F401  (re-exported for callers)
 
 USER_ANSWER_DOC_ID = "user-answer"
 USER_ANSWER_DOC_NAME = "User answer (Questions tab)"
-
-# Fields treated as safety-critical when syncing user answers.
-HIGH_RISK_FIELDS = frozenset(
-    {
-        "maximum_pressure",
-        "supply_voltage",
-        "max_temperature",
-        "connection_standard",
-        "hazardous_area_class",
-    }
-)
 
 
 def _attr_id() -> str:
@@ -37,7 +27,9 @@ def _ev_id() -> str:
 
 
 def _risk_for_field(field: str) -> str:
-    return "critical" if field in HIGH_RISK_FIELDS else "low"
+    from shared.risk import risk_for_field
+
+    return risk_for_field(field)
 
 
 def _attribute_map(db: Session, project_id: str) -> dict[str, AttributeRow]:
@@ -126,6 +118,8 @@ def _upsert_user_evidence(
     )
     if existing:
         existing[0].quote = quote
+        existing[0].value = answer
+        existing[0].unit = attr.unit
         return
     db.add(
         AttributeEvidenceRow(
@@ -136,6 +130,10 @@ def _upsert_user_evidence(
             document_type="user",
             page=None,
             quote=quote,
+            # Mirrors the per-source value on document evidence (M5), so the
+            # requirement side of a compatibility check is self-describing (M6).
+            value=answer,
+            unit=attr.unit,
         )
     )
 

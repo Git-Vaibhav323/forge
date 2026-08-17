@@ -18,10 +18,20 @@ minio==7.2.7
 # PDF text extraction (M4 — evidence-service). Pure Python, no system libs.
 pypdf==4.3.1
 
+# Unit normalization (M5 — review-service). Pure Python, no system libs.
+# 0.24.4+ required: 0.24.3 fails to import against flexparser 0.4.
+pint==0.24.4
+
 # Testing
 pytest==8.3.2
 pytest-asyncio==0.23.8
 httpx==0.27.0
+
+# Nameplate OCR (M7) — OPTIONAL. Only needed for OCR_PROVIDER=tesseract, which
+# also requires the tesseract binary on the system. The default OCR_PROVIDER=off
+# needs none of this: images are stored and read no facts.
+# pytesseract==0.3.13
+# pillow==10.4.0
 
 # Add as each stage is implemented (see plan.md):
 # pgvector==0.3.2           # vector column type

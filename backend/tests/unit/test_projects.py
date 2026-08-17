@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from shared.db.models import ProjectRow
 from services.project_service.repository import generate_project_id, row_to_project
-from app.models.schemas import ProjectGoal, ProjectStatus
+from shared.schemas import ProjectGoal, ProjectStatus
 
 
 def test_generate_project_id_format() -> None:

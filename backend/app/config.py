@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_model: str | None = None
 
+    # Nameplate / image OCR (M7). Default OFF so the stack runs with no system
+    # binaries installed — images are simply stored and read no facts, rather
+    # than the scan failing. See shared/ocr.py.
+    ocr_provider: str = "off"  # off | tesseract | custom
+    ocr_api_url: str | None = None
+    ocr_api_key: str | None = None
+    tesseract_cmd: str | None = None
+
     @model_validator(mode="after")
     def apply_supabase_parts(self):
         if self.postgres_host and self.postgres_password:

@@ -3,6 +3,10 @@ from __future__ import annotations
 import re
 from pathlib import PurePath
 
+# Document types that need OCR rather than a text parser (M7). Lives here,
+# beside guess_doc_type, so pure modules can use it without importing config.
+IMAGE_DOC_TYPES: frozenset[str] = frozenset({"image", "photo", "nameplate", "scan"})
+
 
 def guess_doc_type(filename: str) -> str:
     ext = PurePath(filename).suffix.lower().lstrip(".")

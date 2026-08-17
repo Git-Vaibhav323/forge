@@ -99,6 +99,86 @@ def evidence_client(db_session: Session) -> Generator[TestClient, None, None]:
 
 
 @pytest.fixture
+def review_client(db_session: Session) -> Generator[TestClient, None, None]:
+    from services.review_service.main import app
+    from services.review_service.routers import reviews as reviews_router
+
+    configure_engine(TEST_DATABASE_URL)
+
+    def override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[reviews_router.get_db] = override_get_db
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def relationship_client(db_session: Session) -> Generator[TestClient, None, None]:
+    from services.relationship_service.main import app
+    from services.relationship_service.routers import relationships as rel_router
+
+    configure_engine(TEST_DATABASE_URL)
+
+    def override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[rel_router.get_db] = override_get_db
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def vision_client(db_session: Session) -> Generator[TestClient, None, None]:
+    from services.vision_service.main import app
+    from services.vision_service.routers import vision as vision_router
+
+    configure_engine(TEST_DATABASE_URL)
+
+    def override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[vision_router.get_db] = override_get_db
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def generation_client(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> Generator[TestClient, None, None]:
+    # Artifact bytes are kept in memory so the suite needs no object storage.
+    store: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "services.generation_service.repository._put",
+        lambda key, data, content_type: store.__setitem__(key, data),
+    )
+    monkeypatch.setattr(
+        "services.generation_service.repository._get", lambda key: store[key]
+    )
+    monkeypatch.setattr(
+        "services.generation_service.repository._remove",
+        lambda key: store.pop(key, None),
+    )
+
+    from services.generation_service.main import app
+    from services.generation_service.routers import outputs as outputs_router
+
+    configure_engine(TEST_DATABASE_URL)
+
+    def override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[outputs_router.get_db] = override_get_db
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def question_client(db_session: Session) -> Generator[TestClient, None, None]:
     from services.question_service.main import app
     from services.question_service.routers import questions as questions_router

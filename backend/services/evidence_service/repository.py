@@ -16,7 +16,11 @@ from services.evidence_service.extraction import (
 from shared.evidence_fields import extraction_targets
 from shared.question_engine import build_job_context, list_question_rows as list_q_rows
 from shared.record_sync import apply_user_answers_to_attributes, sync_record_from_questions
+from shared.relationship_sync import resolve_relationships
+from shared.review_sync import sync_reviews
 from shared.html_text import html_to_text
+from shared.ocr import is_enabled as ocr_enabled, read_image_text
+from shared.utils import IMAGE_DOC_TYPES
 from shared.db.models import (
     AttributeEvidenceRow,
     AttributeRow,
@@ -26,6 +30,9 @@ from shared.db.models import (
 from shared.schemas import Attribute
 
 TEXT_DOC_TYPES = {"pdf", "document", "web", "html", "webpage"}
+# Images join the same pipeline via OCR (M7); everything downstream — conflict
+# detection, review holds, compatibility — is unchanged.
+READABLE_DOC_TYPES = TEXT_DOC_TYPES | set(IMAGE_DOC_TYPES)
 
 
 def _attr_id() -> str:
@@ -101,7 +108,9 @@ def _read_pdf_bytes(storage_key: str) -> bytes:
     return get_object(storage_key)
 
 
-def _pages_from_bytes(data: bytes, doc_type: str) -> list[str]:
+def _pages_from_bytes(data: bytes, doc_type: str, filename: str = "") -> list[str]:
+    if doc_type in IMAGE_DOC_TYPES:
+        return read_image_text(data, filename=filename)
     if doc_type in {"web", "html", "webpage"}:
         raw = data.decode("utf-8", errors="replace")
         text = html_to_text(raw) if "<" in raw[:200].lower() or "</" in raw else raw
@@ -119,11 +128,16 @@ def _collect_hits(db: Session, project_id: str) -> list[Hit]:
     )
     hits: list[Hit] = []
     for doc in documents:
-        if doc.type not in TEXT_DOC_TYPES:
+        if doc.type not in READABLE_DOC_TYPES:
+            continue
+        if doc.type in IMAGE_DOC_TYPES and not ocr_enabled():
+            # Stored, listed, and honestly marked as not yet read. Running
+            # without OCR is a supported configuration, not a failure.
+            doc.status = "pending"
             continue
         try:
             data = _read_pdf_bytes(doc.storage_key)
-            pages = _pages_from_bytes(data, doc.type)
+            pages = _pages_from_bytes(data, doc.type, doc.filename)
         except Exception:
             # A single unreadable document must not fail the whole extraction.
             doc.status = "failed"
@@ -194,6 +208,9 @@ def _persist(db: Session, project: ProjectRow, drafts: list[AttributeDraft]) -> 
                     document_type=hit.document_type,
                     page=hit.page,
                     quote=hit.quote,
+                    # Kept per-source so review-service can show who said what.
+                    value=hit.raw_value,
+                    unit=hit.unit,
                 )
             )
 
@@ -209,5 +226,13 @@ def run_extraction(db: Session, project: ProjectRow) -> list[Attribute]:
     drafts = merge_hits(hits, targets)
     _persist(db, project, drafts)
     apply_user_answers_to_attributes(db, project, q_rows)
+    # Variants, compatibility findings and BOM lines all read the record we
+    # just rebuilt, so they are re-derived here (M6). Must run BEFORE
+    # sync_reviews, which turns failed compatibility rules into holds.
+    resolve_relationships(db, project)
+    # `_persist` rebuilds every attribute row, which would otherwise wipe out
+    # decisions a reviewer already made. Replaying them here (and recomputing
+    # conflict/approval counts) is what makes "Re-scan documents" safe. (M5)
+    sync_reviews(db, project)
     db.commit()
     return list_attributes(db, project.id)

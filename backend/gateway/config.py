@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     file_service_url: str = "http://localhost:8002"
     question_service_url: str = "http://localhost:8003"
     evidence_service_url: str = "http://localhost:8004"
+    review_service_url: str = "http://localhost:8005"
+    generation_service_url: str = "http://localhost:8008"
 
 
 settings = Settings()

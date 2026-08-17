@@ -5,13 +5,16 @@ Proxies project routes → project-service (:8001)
 Proxies file upload routes → file-service (:8002)
 Proxies question routes → question-service (:8003)
 Proxies attribute/evidence routes → evidence-service (:8004)
-Other routes remain stub routers until their services merge.
+Proxies review/decision routes → review-service (:8005)
+Proxies output/download routes → generation-service (:8008)
+
+Every public route is now a proxy — there are no stub routers left.
+relationship-service (:8006) and vision-service (:8007) stay internal.
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import outputs, reviews
 from gateway.config import settings
 from gateway.proxy import router as proxy_router
 
@@ -32,8 +35,6 @@ app.add_middleware(
 )
 
 app.include_router(proxy_router)
-app.include_router(reviews.router)
-app.include_router(outputs.router)
 
 
 @app.get("/health", tags=["meta"])

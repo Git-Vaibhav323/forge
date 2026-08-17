@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field as dataclass_field
 
+from shared.utils import IMAGE_DOC_TYPES
+
 
 @dataclass(frozen=True)
 class FieldSpec:
@@ -200,7 +202,19 @@ def merge_hits(hits: list[Hit], required_fields: list[str]) -> list[AttributeDra
                 )
             )
         else:
-            confidence = 0.95 if len(field_hits) > 1 else 0.82
+            # A nameplate photo on its own is a reading, not an established
+            # fact — OCR misreads characters and nobody has confirmed it. It
+            # lands as `unverified`, which makes safety-critical fields a
+            # review hold. A photo that AGREES with a datasheet is a second
+            # source and lifts the field to `known` like any other agreement.
+            image_only = all(
+                (hit.document_type or "") in IMAGE_DOC_TYPES for hit in field_hits
+            )
+            if image_only:
+                confidence, status = 0.6, "unverified"
+            else:
+                confidence = 0.95 if len(field_hits) > 1 else 0.82
+                status = "known"
             drafts.append(
                 AttributeDraft(
                     name=field_name,
@@ -208,7 +222,7 @@ def merge_hits(hits: list[Hit], required_fields: list[str]) -> list[AttributeDra
                     normalized_value=first.normalized,
                     unit=first.unit,
                     confidence=confidence,
-                    status="known",
+                    status=status,
                     risk_level=base_risk,
                     evidence=field_hits,
                 )

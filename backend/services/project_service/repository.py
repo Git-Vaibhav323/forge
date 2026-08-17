@@ -9,7 +9,18 @@ from sqlalchemy.orm import Session
 from services.file_service.storage import remove_object
 from shared.completeness import required_fields, score_answers
 from shared.db.documents import list_documents_for_project, list_documents_grouped
-from shared.db.models import DocumentRow, ProjectRow, QuestionRow
+from shared.db.models import (
+    AttributeEvidenceRow,
+    AttributeRow,
+    BomLineRow,
+    CompatibilityFindingRow,
+    DocumentRow,
+    ProductRelationshipRow,
+    ProjectRow,
+    QuestionRow,
+    ReviewDecisionRow,
+    ReviewItemRow,
+)
 from shared.schemas import Project, ProjectCreateInput, ProjectGoal, ProjectStatus
 
 
@@ -84,6 +95,46 @@ def delete_project(db: Session, project_id: str) -> bool:
     storage_keys = list(
         db.scalars(select(DocumentRow.storage_key).where(DocumentRow.project_id == project_id))
     )
+    # Children are removed explicitly: SQLite (used by the test suite) does not
+    # enforce ON DELETE CASCADE unless PRAGMA foreign_keys is on.
+    review_ids = list(
+        db.scalars(select(ReviewItemRow.id).where(ReviewItemRow.project_id == project_id))
+    )
+    if review_ids:
+        db.execute(
+            delete(ReviewDecisionRow).where(ReviewDecisionRow.review_item_id.in_(review_ids))
+        )
+    db.execute(delete(ReviewItemRow).where(ReviewItemRow.project_id == project_id))
+
+    db.execute(
+        delete(ProductRelationshipRow).where(
+            ProductRelationshipRow.project_id == project_id
+        )
+    )
+    # Links pointing AT this job would otherwise dangle — no FK covers them.
+    db.execute(
+        delete(ProductRelationshipRow).where(
+            ProductRelationshipRow.related_project_id == project_id
+        )
+    )
+    db.execute(
+        delete(CompatibilityFindingRow).where(
+            CompatibilityFindingRow.project_id == project_id
+        )
+    )
+    db.execute(delete(BomLineRow).where(BomLineRow.project_id == project_id))
+
+    attribute_ids = list(
+        db.scalars(select(AttributeRow.id).where(AttributeRow.project_id == project_id))
+    )
+    if attribute_ids:
+        db.execute(
+            delete(AttributeEvidenceRow).where(
+                AttributeEvidenceRow.attribute_id.in_(attribute_ids)
+            )
+        )
+    db.execute(delete(AttributeRow).where(AttributeRow.project_id == project_id))
+
     db.execute(delete(QuestionRow).where(QuestionRow.project_id == project_id))
     db.execute(delete(DocumentRow).where(DocumentRow.project_id == project_id))
     db.delete(row)
